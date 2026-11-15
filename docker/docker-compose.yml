@@ -23,7 +23,7 @@ services:
 
   bastion3270-server:
     # The release of this version (the release workflow checks that the tag matches).
-    image: ghcr.io/tom-danek/bastion3270-server:0.1.0
+    image: ghcr.io/tom-danek/bastion3270-server:0.1.1
     container_name: bastion3270-server
     networks: [mainframe]
     depends_on: [hercules-tk4]

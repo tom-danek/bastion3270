@@ -21,4 +21,4 @@ resources:
 images:
   - name: bastion3270-server
     newName: ghcr.io/tom-danek/bastion3270-server
-    newTag: 0.1.0
+    newTag: 0.1.1

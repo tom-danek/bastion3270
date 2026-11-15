@@ -164,15 +164,18 @@ Details are in the [architecture](docs/ARCHITECTURE.md).
 
 Each [release](https://github.com/tom-danek/bastion3270/releases) has:
 
-* the **desktop client** for Linux (x86_64), Windows (x86_64) and macOS (Apple Silicon);
+* the **desktop client** for Linux (x86_64, glibc 2.28 or newer: RHEL 8+, SLES 15+, Debian 11+,
+  Ubuntu 20.04+), Windows (x86_64) and macOS (Apple Silicon, macOS 11+);
 * the **gateway** as a static Linux binary (x86_64 and arm64) with an example configuration;
-* `SHA256SUMS` and a CycloneDX SBOM of every build.
+* `SHA256SUMS` and a CycloneDX SBOM of every build;
+* a signed build provenance attestation for every file (from 0.1.1 on):
+  `gh attestation verify <file> --repo tom-danek/bastion3270`.
 
 The gateway's **container image** for `linux/amd64` and `linux/arm64`, with an SBOM and build
 provenance:
 
 ```bash
-docker pull ghcr.io/tom-danek/bastion3270-server:0.1.0    # or :latest
+docker pull ghcr.io/tom-danek/bastion3270-server:0.1.1    # or :latest
 ```
 
 The desktop builds are not code-signed yet, so Windows SmartScreen and macOS Gatekeeper warn on

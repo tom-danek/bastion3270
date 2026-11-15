@@ -7,6 +7,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.
 may contain breaking changes to the configuration or the WebSocket protocol; they are listed
 under **Changed**.
 
+## [0.1.1]
+
+### Fixed
+
+* The Linux desktop client runs with glibc 2.28 or newer — RHEL 8 and 9 and their rebuilds
+  (Rocky, Alma, Oracle), SLES 15, Debian 11, Ubuntu 20.04 and later; 0.1.0 needed glibc 2.35.
+  Each release starts the client on Rocky Linux 8 and 9 before it is published.
+
+### Added
+
+* Signed build provenance attestations for every release asset and the container image:
+  `gh attestation verify <file> --repo tom-danek/bastion3270`.
+
+### Changed
+
+* The quick start (`docker/docker-compose.yml`) runs the published gateway image instead of a
+  local build; `docker/docker-compose.build.yml` builds it from the checkout.
+* Dependency updates: `rustls-pki-types` 1.16, `webpki-roots`, `uuid`.
+
 ## [0.1.0]
 
 First public release.
@@ -72,4 +91,5 @@ First public release.
 * Desktop archives for Linux (x86_64), Windows (x86_64) and macOS (Apple Silicon) with
   `SHA256SUMS`, the third-party licence texts and a CycloneDX SBOM per platform.
 
+[0.1.1]: https://github.com/tom-danek/bastion3270/releases/tag/v0.1.1
 [0.1.0]: https://github.com/tom-danek/bastion3270/releases/tag/v0.1.0
