@@ -1,4 +1,4 @@
-# Release builds of the desktop client. Runs only when a version tag is pushed
+# Release builds of the desktop client and the gateway. Runs only when a version tag is pushed
 # (`git tag -a v0.1.0 -m "bastion3270 0.1.0" && git push origin v0.1.0`), never on normal pushes.
 # Started by hand (Actions → release → Run workflow) it builds and keeps the archives as workflow
 # artifacts without creating a release — a dry run.
@@ -11,6 +11,10 @@
 # * Every archive contains THIRD_PARTY_LICENSES: the licence texts of all third-party crates in
 #   the binary (cargo-about, `about.toml`), as their licences require for binary distribution.
 # * Every platform gets a CycloneDX SBOM (`*.cdx.json`, cargo-cyclonedx) as a release asset.
+# * The gateway is built by the container build (`docker/Dockerfile.server`) on a native runner
+#   per architecture: the static binary of the release archive is the binary of the image. On a
+#   tag the image is pushed to ghcr.io with an SBOM and build provenance, and both
+#   architectures are joined under the version tag and `latest`.
 # * The result is a draft release with the archives, the SBOMs and `SHA256SUMS`; it is published
 #   by hand after the notes have been read.
 name: release
@@ -41,22 +45,25 @@ jobs:
           cargo install --locked cargo-cyclonedx --version 0.5.9
       - name: Third-party licences
         run: |
-          mkdir -p notices sbom
+          mkdir -p notices notices-gateway sbom
           cargo about generate --locked -m crates/bastion3270-gui/Cargo.toml about.hbs \
             -o notices/THIRD_PARTY_LICENSES
+          cargo about generate --locked -m crates/bastion3270-server/Cargo.toml about.hbs \
+            -o notices-gateway/THIRD_PARTY_LICENSES
       - name: SBOMs
-        # One per platform of the build matrix below (keep the two lists in step).
+        # One per platform of the build matrices below (keep the lists in step).
         run: |
-          for entry in x86_64-unknown-linux-gnu:linux-x86_64 aarch64-apple-darwin:macos-arm64; do
-            # Windows is disabled in the matrix; add x86_64-pc-windows-msvc:windows-x86_64 with it.
-            target=${entry%%:*}
-            platform=${entry##*:}
+          sbom() {  # crate, target, platform
             cargo cyclonedx -q -f json --spec-version 1.5 --describe binaries --no-build-deps \
-              --target "$target" --manifest-path crates/bastion3270-gui/Cargo.toml
-            mv crates/bastion3270-gui/bastion3270-gui_bin.cdx.json \
-              "sbom/bastion3270-gui-${GITHUB_REF_NAME}-${platform}.cdx.json"
+              --target "$2" --manifest-path "crates/$1/Cargo.toml"
+            mv "crates/$1/$1_bin.cdx.json" "sbom/$1-${GITHUB_REF_NAME}-$3.cdx.json"
             find crates -name '*.cdx.json' -delete
-          done
+          }
+          sbom bastion3270-gui x86_64-unknown-linux-gnu linux-x86_64
+          sbom bastion3270-gui x86_64-pc-windows-msvc windows-x86_64
+          sbom bastion3270-gui aarch64-apple-darwin macos-arm64
+          sbom bastion3270-server x86_64-unknown-linux-musl linux-x86_64
+          sbom bastion3270-server aarch64-unknown-linux-musl linux-arm64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: notices
@@ -64,7 +71,13 @@ jobs:
           if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: sbom
+          name: notices-gateway
+          path: notices-gateway/*
+          if-no-files-found: error
+      # Release assets are the artifacts named `asset-*`.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-sbom
           path: sbom/*
           if-no-files-found: error
 
@@ -166,24 +179,133 @@ jobs:
           rm -r "dist/$name"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.platform }}
+          name: asset-${{ matrix.platform }}
           path: dist/*
           if-no-files-found: error
 
+  # The gateway: the container build on a native runner per architecture. Its `binary` stage is
+  # the release archive; on a tag the same build is pushed as the image of that architecture.
+  gateway:
+    needs: notices
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: amd64
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            platform: linux-arm64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/bastion3270-server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notices-gateway
+          path: notices
+      - name: Tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
+            exit 1
+          fi
+      # A BuildKit builder of its own: keeps the build stage between the binary and the image,
+      # and can attach an SBOM and provenance to the image.
+      - name: Builder
+        run: docker buildx create --use --name release --driver docker-container
+      - name: Binary
+        run: |
+          docker buildx build --platform "linux/${{ matrix.arch }}" -f docker/Dockerfile.server \
+            --target binary --output type=local,dest=out .
+          file out/bastion3270-server
+          out/bastion3270-server --check-config docker/bastion3270-server.toml
+      - name: Package
+        run: |
+          name="bastion3270-server-${GITHUB_REF_NAME}-${{ matrix.platform }}"
+          mkdir -p "dist/$name"
+          cp out/bastion3270-server LICENSE NOTICE THIRD_PARTY_NOTICES notices/THIRD_PARTY_LICENSES \
+            README.md "dist/$name/"
+          cp docker/bastion3270-server.toml "dist/$name/bastion3270-server.example.toml"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          rm -r "dist/$name"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-gateway-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+      - name: Image of this architecture
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx build --platform "linux/${{ matrix.arch }}" -f docker/Dockerfile.server \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME#v}" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --sbom=true --provenance=mode=max --metadata-file meta.json \
+            --output "type=image,name=$IMAGE,push-by-digest=true,name-canonical=true,push=true" .
+          mkdir -p digests
+          digest=$(jq -r '."containerimage.digest"' meta.json)
+          touch "digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: digests-${{ matrix.platform }}
+          path: digests/*
+          if-no-files-found: error
+
+  # One image for both architectures under the version and `latest`.
+  image:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: gateway
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/bastion3270-server
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-*
+          path: digests
+          merge-multiple: true
+      - name: Multi-architecture image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          version=${GITHUB_REF_NAME#v}
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.description=TN3270 web gateway: runs 3270 sessions on the server and serves a browser client" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --annotation "index:org.opencontainers.image.licenses=Apache-2.0" \
+            --annotation "index:org.opencontainers.image.version=$version" \
+            -t "$IMAGE:$version" -t "$IMAGE:latest" \
+            $(for d in digests/*; do printf '%s@sha256:%s ' "$IMAGE" "$(basename "$d")"; done)
+          docker buildx imagetools inspect "$IMAGE:$version"
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    # Not on the image: the archives are released even if the image push failed.
+    needs: [build, gateway]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: asset-*
           path: dist
           merge-multiple: true
-      # The licence texts are inside every archive; not a release asset of their own.
-      - name: Drop the shared notices
-        run: rm dist/THIRD_PARTY_LICENSES
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS && cat SHA256SUMS

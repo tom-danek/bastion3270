@@ -23,8 +23,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked -p bastion3270-server \
  && install -D -m 0755 target/release/bastion3270-server /out/bastion3270-server
 
+# ─── The binary alone (release archives) ───────────────────────────────────────────
+#   docker build -f docker/Dockerfile.server --target binary --output type=local,dest=out .
+FROM scratch AS binary
+COPY --from=build /out/bastion3270-server /bastion3270-server
+
 # ─── Stage 2: runtime ──────────────────────────────────────────────────────────────
 FROM scratch
+LABEL org.opencontainers.image.title="bastion3270-server" \
+      org.opencontainers.image.description="TN3270 web gateway: runs 3270 sessions on the server and serves a browser client" \
+      org.opencontainers.image.source="https://github.com/tom-danek/bastion3270" \
+      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /out/bastion3270-server /bastion3270-server
 # No configuration in the image: it is mounted at /etc/bastion3270/ (compose volume, Kubernetes
 # ConfigMap). Without one the gateway refuses to start instead of serving the lab example.
