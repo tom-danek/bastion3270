@@ -825,11 +825,13 @@ fn test_view_settings_are_stored_in_the_selected_profile() {
 /// The desktop profile example of `docs/CONFIGURATION.md` is a valid profile file.
 #[test]
 fn test_documented_profile_file_example_loads() {
+    // A Windows checkout may have CRLF line ends (Git's `core.autocrlf`).
     let doc = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../docs/CONFIGURATION.md"
     ))
-    .expect("read the configuration reference");
+    .expect("read the configuration reference")
+    .replace("\r\n", "\n");
     let section = doc
         .split("## 3. Desktop client profiles")
         .nth(1)
