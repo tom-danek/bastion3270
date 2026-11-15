@@ -75,7 +75,9 @@ podman logs -f bastion3270-hercules          # MVS IPL takes about a minute
   (as the TK4- manual says) and the logon screen appears.
 * Default TK4- TSO users (public defaults of the TK4- distribution, local emulator only):
   `HERC01` / `CUL8TR`, `HERC02` / `CUL8TR`, `HERC03` / `PASS4U`.
-* Hercules + gateway together: `podman-compose -f docker/docker-compose.yml up -d --build`.
+* Hercules + the published gateway image: `podman-compose -f docker/docker-compose.yml up -d`;
+  with the gateway built from this checkout instead:
+  `podman-compose -f docker/docker-compose.yml -f docker/docker-compose.build.yml up -d --build`.
 
 ---
 
@@ -259,11 +261,16 @@ cargo cyclonedx -f json --spec-version 1.5 --describe binaries --no-build-deps \
     --target x86_64-unknown-linux-gnu --manifest-path crates/bastion3270-gui/Cargo.toml
 ```
 
-**CI** (`.github/workflows/ci.yml`) runs one job on every push to `main` and every pull request:
-format, clippy, tests, `cargo deny` and the web client tests in Chrome and Firefox. Started by
-hand (Actions → ci → Run workflow, e.g. before a release) it also runs the web client tests in
-Edge, a 60-second run of every fuzz target and the container build. Long fuzzing campaigns
-(`fuzz/campaign.sh`) run locally. Third-party actions are pinned to commit SHAs.
+**CI** (`.github/workflows/ci.yml`) runs on every push to `main` and every pull request that
+changes more than documentation: format, clippy, tests, `cargo deny` and the web client tests in
+Chrome and Firefox; the tests of the desktop client's crates on Windows and macOS; and a build
+with the oldest supported Rust (the `rust-version` in `Cargo.toml`). Weekly it checks the
+security advisories and runs every fuzz target for 60 seconds. Started by hand (Actions → ci →
+Run workflow, e.g. before a release) it also runs the web client tests in Edge and the fuzz
+targets. Long fuzzing campaigns (`fuzz/campaign.sh`) run locally. The container image is built
+and started with the example configuration by `.github/workflows/container.yml` whenever the
+Dockerfile, `.dockerignore` or `Cargo.lock` changes. Actions are pinned to commit SHAs, the
+workflow token is read-only and every job has a time limit.
 
 **Releases** (`.github/workflows/release.yml`) are built only from a version tag, never from a
 normal push. The tag must match the workspace version in `Cargo.toml`:
@@ -279,7 +286,14 @@ The gateway is built by its container build on a native runner per architecture 
 the `binary` stage of `docker/Dockerfile.server` becomes the release archive, and on a tag the
 same build is pushed to `ghcr.io/tom-danek/bastion3270-server` with an SBOM and build
 provenance, joined into one image under the version and `latest`. The archives, the SBOMs and
-`SHA256SUMS` are attached to a draft release, which is published by hand.
+`SHA256SUMS` are attached to a draft release, which is published by hand. Every asset and the
+image get a signed build provenance attestation (GitHub artifact attestations, Sigstore):
+
+```bash
+gh attestation verify bastion3270-server-vX.Y.Z-linux-x86_64.tar.gz --repo tom-danek/bastion3270
+gh attestation verify oci://ghcr.io/tom-danek/bastion3270-server:X.Y.Z --repo tom-danek/bastion3270
+```
+
 The binaries are not code-signed with a trusted identity yet. On macOS the first start is
 refused; allow it in System Settings → Privacy & Security → Open Anyway, or remove the download
 flag with `xattr -dr com.apple.quarantine bastion3270.app`. Windows SmartScreen asks too (More

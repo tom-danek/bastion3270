@@ -47,17 +47,17 @@ The project contains two products built on one common, secure core:
 ## Try it in five minutes
 
 You need Git and [Podman](https://podman.io/) with `podman-compose`, or Docker with Docker
-Compose. The stack builds the gateway and starts a local
+Compose. The stack runs the published gateway image and a local
 [Hercules](https://sdl-hercules-390.github.io/html/) emulator with the free MVS 3.8j
 "TK4-" system.
 
 ```bash
 git clone https://github.com/tom-danek/bastion3270.git
 cd bastion3270
-podman-compose -f docker/docker-compose.yml up -d --build    # or: docker compose -f … up -d --build
+podman-compose -f docker/docker-compose.yml up -d    # or: docker compose -f docker/docker-compose.yml up -d
 ```
 
-The first build takes a few minutes. Then:
+The first start downloads the two images (about 400 MB, nearly all of it the emulator). Then:
 
 1. Open <http://127.0.0.1:8080>. The demo offers one system, **Hercules MVS 3.8j (TK4-)**, so
    the client connects to it at once.
