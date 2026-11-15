@@ -1751,13 +1751,13 @@ async fn sessions_run_in_tabs_and_survive_a_reload() {
             .click()
             .await
             .unwrap();
-        let back = js::<bool>(
+        // The picker appears once the profiles are loaded (a fetch), not with the click.
+        wait_until(
             &driver,
-            "return !document.getElementById('picker-back').hidden;",
-            vec![],
+            "the picker offers the way back to the sessions",
+            "return document.getElementById('picker-back').hidden ? null : true;",
         )
         .await;
-        assert!(back, "the picker offers the way back to the sessions");
         fx.open_from_picker(&driver, "pcomm").await;
         assert_eq!(tab_count(&driver).await, 2);
         assert_eq!(fx.host.connection_count(), 2);
