@@ -1,0 +1,10 @@
+host = "zos.example.com"
+port = 992
+tls_mode = "enabled"
+terminal_model = "Model4"
+color_3279 = true
+extended = true
+codepage = "cp037"
+connect_timeout_ms = 10000
+idle_timeout_ms = 60000
+channel_capacity = 128

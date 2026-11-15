@@ -1,0 +1,47 @@
+# Supply-chain policy for `cargo deny check` (run locally and in CI).
+#
+# * advisories: any RustSec vulnerability or unmaintained/unsound crate fails the check.
+# * licenses:   only permissive licences compatible with Apache-2.0 distribution.
+# * bans:       duplicate versions are reported, wildcard version requirements are refused.
+# * sources:    crates.io only; no git or other registries.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+# Each exception names the advisory and why it does not apply (`{ id = "…", reason = "…" }`).
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "BSL-1.0",
+]
+# Licences that are accepted for one crate only, because they cover data rather than code.
+exceptions = [
+    # Fonts bundled by the desktop client's GUI toolkit.
+    { crate = "epaint_default_fonts", allow = ["OFL-1.1", "Ubuntu-font-1.0"] },
+    # Mozilla's CA certificate list.
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

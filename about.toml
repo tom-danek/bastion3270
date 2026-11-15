@@ -1,0 +1,32 @@
+# cargo-about: licence texts of every third-party crate compiled into a shipped binary
+# (release archives and the container image). Generated at release time:
+#
+#   cargo about generate -m crates/bastion3270-gui/Cargo.toml about.hbs -o THIRD_PARTY_LICENSES
+#
+# The accepted licences are those of deny.toml ([licenses] allow + the per-crate exceptions for
+# data); a crate under any other licence fails the generation.
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "CDLA-Permissive-2.0",
+]
+# The platforms we ship; platform-specific dependencies of other targets are not in a binary.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# The workspace's own crates (publish = false) are covered by LICENSE / NOTICE.
+private = { ignore = true }

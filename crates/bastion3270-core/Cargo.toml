@@ -1,0 +1,24 @@
+[package]
+publish = false
+name = "bastion3270-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core TN3270/TN3270E protocol engine, EBCDIC translation, and zero-trust screen buffer"
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1"
+criterion = { workspace = true }
+
+[[bench]]
+name = "datastream"
+harness = false
+
+[lints]
+workspace = true
+
+

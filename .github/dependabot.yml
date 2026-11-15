@@ -1,0 +1,32 @@
+# Monthly update proposals for the Rust dependencies, the pinned container base image and the
+# pinned GitHub Actions, one grouped pull request per ecosystem (each pull request runs CI once).
+# Security advisories are checked weekly by the scheduled CI job in any case.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: monthly
+    groups:
+      base-images:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+  # Minor and patch updates only: a new major version changes APIs and is migrated by hand as
+  # planned work (with its tests); advisories are still caught by the weekly CI job.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      rust-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

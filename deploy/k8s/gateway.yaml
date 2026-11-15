@@ -1,0 +1,74 @@
+# Gateway API (gateway.networking.k8s.io/v1): TLS termination, HTTP → HTTPS redirect and HSTS in
+# front of the gateway Service. Works with any conformant implementation (Envoy Gateway,
+# Istio, Cilium, NGINX Gateway Fabric, cloud load balancers, ...).
+#
+# * `gatewayClassName`: the GatewayClass of your controller (e.g. `eg` for Envoy Gateway).
+#   If your platform team runs a shared Gateway, delete the Gateway below and point the routes'
+#   `parentRefs` at theirs (it must allow routes from this namespace).
+# * The certificate for the host name is the Secret `bastion3270-tls` (type kubernetes.io/tls).
+# * WebSockets need no extra setting (HTTP/1.1 upgrade); the gateway pings every browser, so
+#   proxy idle timeouts do not cut an attached session.
+# * With static-token authentication the browser sends its bearer token in the
+#   `Sec-WebSocket-Protocol` header: do not add that header to custom access-log formats.
+# * One replica (default in-memory session store): no session affinity is needed. More
+#   replicas need affinity per browser (Gateway API `sessionPersistence`, experimental, or your
+#   controller's own policy) and a pod restart still drops its sessions.
+# * With [server.tls] on the gateway, the hop to the pod is TLS too: add a BackendTLSPolicy for
+#   the Service (and a client certificate in your controller's backend policy for mutual TLS).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: bastion3270
+spec:
+  gatewayClassName: example        # TODO: your GatewayClass
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: tn3270.example.internal
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: bastion3270-tls
+      allowedRoutes:
+        namespaces: { from: Same }
+    - name: http                   # only redirects to HTTPS
+      protocol: HTTP
+      port: 80
+      hostname: tn3270.example.internal
+      allowedRoutes:
+        namespaces: { from: Same }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bastion3270-server
+spec:
+  parentRefs:
+    - { name: bastion3270, sectionName: https }
+  hostnames: [tn3270.example.internal]
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: / }
+      filters:
+        # HSTS: browsers never send the bearer token over plain HTTP after the first visit.
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Strict-Transport-Security
+                value: "max-age=31536000; includeSubDomains"
+      backendRefs:
+        - { name: bastion3270-server, port: 80 }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bastion3270-server-redirect
+spec:
+  parentRefs:
+    - { name: bastion3270, sectionName: http }
+  hostnames: [tn3270.example.internal]
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect: { scheme: https, statusCode: 301 }

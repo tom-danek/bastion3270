@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- A shield around the mainframe prompt "===>" and a block cursor.
+       Source of the PNG icons: rsvg-convert -w 512 -h 512 icon.svg -o icon-512.png (and 192).
+       icon-512.png is also the desktop client's icon and the macOS bundle's icon. -->
+  <rect width="512" height="512" rx="96" fill="#0a0e14"/>
+  <path d="M256 76 L412 128 V252 C412 340 348 408 256 440 C164 408 100 340 100 252 V128 Z"
+        fill="#121821" stroke="#00e5ff" stroke-width="26" stroke-linejoin="round"/>
+  <rect x="128" y="204" width="38" height="22" rx="4" fill="#3ddc84"/>
+  <rect x="128" y="248" width="38" height="22" rx="4" fill="#3ddc84"/>
+  <rect x="176" y="204" width="38" height="22" rx="4" fill="#3ddc84"/>
+  <rect x="176" y="248" width="38" height="22" rx="4" fill="#3ddc84"/>
+  <rect x="224" y="204" width="38" height="22" rx="4" fill="#3ddc84"/>
+  <rect x="224" y="248" width="38" height="22" rx="4" fill="#3ddc84"/>
+  <path d="M274 190 L314 237 L274 284" fill="none" stroke="#3ddc84" stroke-width="22"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="334" y="184" width="44" height="106" rx="4" fill="#00e5ff"/>
+</svg>

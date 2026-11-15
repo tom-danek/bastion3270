@@ -1,0 +1,149 @@
+# Continuous integration. Third-party actions are pinned to commit SHAs (the tag is noted next to
+# each) and the workflow token is read-only.
+#
+# * Every push to main and every pull request: one job on one runner (one build, one cache) —
+#   formatting, clippy, tests (incl. property tests), supply-chain policy and the web client tests
+#   in Chrome and Firefox.
+# * On demand (Actions → ci → Run workflow, e.g. before a release): additionally Edge, a short
+#   fuzzing run per target and the container build. Long fuzzing campaigns run locally
+#   (`fuzz/campaign.sh`).
+# * Weekly: only the advisory check, so a vulnerability published between pushes is noticed.
+name: ci
+
+on:
+  # Disabled for now to conserve Actions minutes; uncomment to run on every push to main.
+  # push:
+  #   branches: [main]
+  # schedule:
+  #   - cron: "17 5 * * 1"   # Monday 05:17 UTC
+  pull_request:
+  workflow_dispatch:
+
+# A newer push supersedes a running check of the same branch (the weekly run has its own
+# group, so it never cancels a push check).
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Desktop client build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Format
+        run: |
+          cargo fmt --all --check
+          cargo fmt --all --check --manifest-path fuzz/Cargo.toml
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --locked --workspace
+      # The shipped example configurations must stay valid (also the one inside the ConfigMap).
+      - name: Example configurations
+        run: |
+          cargo run --locked -q -p bastion3270-server -- --check-config docker/bastion3270-server.toml
+          python3 -c "import sys, yaml; print(yaml.safe_load(open('deploy/k8s/configmap.yaml'))['data']['bastion3270-server.toml'])" > "$RUNNER_TEMP/configmap.toml"
+          cargo run --locked -q -p bastion3270-server -- --check-config "$RUNNER_TEMP/configmap.toml"
+      - name: Supply-chain policy
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+      # The runner image ships each browser with its driver (`$<BROWSER>WEBDRIVER` is the
+      # directory of the driver binary).
+      - name: Web client tests (Chrome, Firefox)
+        run: |
+          $CHROMEWEBDRIVER/chromedriver --port=9515 > chromedriver.log 2>&1 &
+          $GECKOWEBDRIVER/geckodriver --port 4444 > geckodriver.log 2>&1 &
+          cargo test --locked -p bastion3270-server --test web_client_tests -- --ignored
+          BASTION3270_WEBDRIVER=firefox \
+            cargo test --locked -p bastion3270-server --test web_client_tests -- --ignored
+      - name: WebDriver logs
+        if: failure()
+        run: cat chromedriver.log geckodriver.log || true
+
+  advisories:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Security advisories (RustSec)
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+
+  web-edge:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Desktop client build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; Chrome ships a
+      # profile that allows them, Edge does not, so its sandbox cannot start. Lift the
+      # restriction on this throw-away runner instead of disabling the browser sandbox.
+      - name: Allow the browser sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Web client tests (Edge)
+        env:
+          BASTION3270_WEBDRIVER: edge
+        run: |
+          $EDGEWEBDRIVER/msedgedriver --port=9515 > msedgedriver.log 2>&1 &
+          cargo test --locked -p bastion3270-server --test web_client_tests -- --ignored
+      - name: WebDriver log
+        if: failure()
+        run: cat msedgedriver.log
+
+  fuzz-smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [telnet_inbound, datastream, keyboard, client_message, profile_toml]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # libFuzzer's coverage instrumentation needs the nightly-only `-Z sanitizer` flag.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      # New inputs go to the (ignored) working corpus; the committed seeds are read only.
+      - name: Fuzz ${{ matrix.target }} for 60 s
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          cargo +nightly fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=60
+      - name: Keep the reproducer
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+
+  container:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -f docker/Dockerfile.server -t bastion3270-server:ci .

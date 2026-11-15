@@ -1,0 +1,10 @@
+# Keep the build context small and free of secrets / local artefacts.
+target/
+vendor/
+.git/
+.vscode/
+.idea/
+*.pem
+*.crt
+*.key
+.env

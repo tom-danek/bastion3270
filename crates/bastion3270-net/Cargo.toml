@@ -1,0 +1,32 @@
+[package]
+publish = false
+name = "bastion3270-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TCP and TLS (AT-TLS) transport layer for bastion3270"
+
+[dependencies]
+bastion3270-core = { workspace = true }
+tokio = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+webpki-roots = { workspace = true }
+rustls-native-certs = { workspace = true }
+x509-parser = { workspace = true }
+sha2 = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+rcgen = { workspace = true }
+
+[lints]
+workspace = true
+
+

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bastion3270</title>
+<meta name="theme-color" content="#121821">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<!-- Lets the browser install the client as an application. Fetched with credentials, so it
+     also loads behind a proxy that signs users in with a cookie. -->
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="bar">
+  <span class="brand">bastion3270</span>
+  <nav id="tabs" class="tabs" aria-label="Sessions"></nav>
+  <button id="btn-new" type="button" class="icon" data-i18n-label="tabs.new" aria-label="New session" hidden>+</button>
+  <span class="spacer"></span>
+  <span id="build" class="muted"></span>
+  <select id="lang" aria-label="Language" data-i18n-label="bar.language"></select>
+  <button id="btn-settings" type="button" class="icon" data-i18n-label="bar.settings" aria-label="Settings">⚙</button>
+  <button id="btn-help" type="button" class="icon" data-i18n-label="bar.help" aria-label="Keyboard" hidden>⌨</button>
+  <button id="btn-print" type="button" class="icon" data-i18n-label="bar.print" aria-label="Print" hidden>🖶</button>
+  <button id="btn-fullscreen" type="button" class="icon" data-i18n-label="bar.fullscreen" aria-label="Full screen" hidden>⛶</button>
+  <button id="btn-disconnect" type="button" data-i18n="bar.disconnect" hidden>Disconnect</button>
+  <button id="btn-logout" type="button" data-i18n="bar.logout" hidden>Log out</button>
+</header>
+<!-- Client messages: info expires, warnings and errors stay until dismissed or replaced. -->
+<div id="message" class="message" role="status" hidden>
+  <span id="message-text"></span>
+  <button id="message-again" type="button" data-i18n="msg.connect_again" hidden>Connect again</button>
+  <button id="message-close" type="button" class="icon" data-i18n-label="msg.dismiss" aria-label="Dismiss">✕</button>
+</div>
+
+<main>
+  <section id="login" class="panel" hidden>
+    <h2 data-i18n="login.title">Gateway token</h2>
+    <p class="muted" data-i18n="login.hint">This gateway requires a bearer token.</p>
+    <form id="login-form">
+      <input id="token" type="password" autocomplete="off" placeholder="token" data-i18n-placeholder="login.placeholder" required>
+      <button type="submit" data-i18n="login.submit">Continue</button>
+    </form>
+  </section>
+
+  <section id="picker" class="panel" hidden>
+    <h2 data-i18n="picker.title">Connect to</h2>
+    <input id="picker-filter" type="search" data-i18n-placeholder="picker.filter" placeholder="Filter" hidden>
+    <ul id="recent" class="recent" hidden></ul>
+    <ul id="profiles"></ul>
+    <h3 id="custom-title" data-i18n="picker.custom" hidden>My connections</h3>
+    <ul id="custom-list" class="custom-list" hidden></ul>
+    <p><button id="btn-custom-new" type="button" data-i18n="custom.new" hidden>+ New connection</button></p>
+    <p><button id="picker-back" type="button" data-i18n="picker.back" hidden>Back to the sessions</button></p>
+  </section>
+
+  <dialog id="settings">
+    <h2 data-i18n="settings.title">Settings</h2>
+    <fieldset>
+      <legend data-i18n="settings.display">Display</legend>
+      <label><span data-i18n="settings.theme">Colours</span> <select id="set-theme"></select></label>
+      <label><span data-i18n="settings.cursor">Cursor</span> <select id="set-cursor"></select></label>
+      <label><input id="set-blink" type="checkbox"> <span data-i18n="settings.blink">Blinking cursor</span></label>
+      <label><input id="set-crosshair" type="checkbox"> <span data-i18n="settings.crosshair">Crosshair</span></label>
+      <label><input id="set-keybar" type="checkbox"> <span data-i18n="settings.keybar">Key bar</span></label>
+    </fieldset>
+    <fieldset>
+      <legend data-i18n="settings.keyboard">Keyboard</legend>
+      <label><span data-i18n="settings.blank_fill">Blank fill</span> <select id="set-blank"></select></label>
+    </fieldset>
+    <form method="dialog"><button data-i18n="help.close">Close</button></form>
+  </dialog>
+  <dialog id="custom-dialog">
+    <h2 id="custom-dialog-title"></h2>
+    <div class="custom-form">
+      <label><span data-i18n="custom.name">Name</span> <input id="custom-name" type="text" maxlength="40"></label>
+      <label><span data-i18n="custom.host">Host</span> <input id="custom-host" type="text" maxlength="253" autocomplete="off" spellcheck="false"></label>
+      <label><span data-i18n="custom.port">Port</span> <input id="custom-port" type="number" min="1" max="65535"></label>
+      <label><input id="custom-tls" type="checkbox"> <span data-i18n="custom.tls">TLS (encrypted)</span></label>
+      <p id="custom-note" class="muted" hidden></p>
+    </div>
+    <div id="custom-options"></div>
+    <p id="custom-error" class="muted" hidden></p>
+    <p class="buttons">
+      <button id="custom-connect" type="button" data-i18n="custom.connect">Save and connect</button>
+      <button id="custom-save" type="button" data-i18n="custom.save">Save</button>
+      <button id="custom-cancel" type="button" data-i18n="custom.cancel">Cancel</button>
+    </p>
+  </dialog>
+  <dialog id="keyhelp">
+    <h2 data-i18n="help.title">Keyboard layout</h2>
+    <label><span data-i18n="help.preset">Layout for this system</span>
+      <select id="preset"></select></label>
+    <table id="keyhelp-table"></table>
+    <form method="dialog"><button data-i18n="help.close">Close</button></form>
+  </dialog>
+  <section id="terminal" hidden>
+    <canvas id="screen" tabindex="0" aria-label="3270 terminal screen"></canvas>
+    <div id="oia" class="oia"></div>
+    <div id="banner" class="banner" hidden></div>
+    <div id="keybar" class="keybar"></div>
+  </section>
+
+</main>
+
+<!-- Filled only while the browser prints (beforeprint / afterprint); the print style shows
+     nothing else. -->
+<pre id="print-view"></pre>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+# Rust / Cargo build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Reference repositories & local emulators (not committed to git)
+/vendor/x3270-ref/
+/hercules/
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Environment & certificates
+.env
+*.pem
+*.crt
+*.key
+
+
+# cargo-fuzz build output, crash artifacts, coverage data, the working corpus and campaign
+# logs (the committed seed inputs are in fuzz/seeds)
+fuzz/target
+fuzz/artifacts
+fuzz/coverage
+fuzz/corpus
+fuzz/logs
+
+# SBOMs written by cargo-cyclonedx next to each crate manifest
+*.cdx.json

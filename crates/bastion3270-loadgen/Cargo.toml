@@ -1,0 +1,26 @@
+[package]
+publish = false
+name = "bastion3270-loadgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Load and soak generator for the bastion3270 gateway: simulated hosts and browsers"
+
+[dependencies]
+bastion3270-core = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rcgen = { workspace = true }
+futures-util = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+bastion3270-server = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+host = "127.0.0.1"
+port = 3270
+tls_mode = "disabled"
+terminal_model = "Model4"
+color_3279 = true
+extended = true
+codepage = "cp037"
+connect_timeout_ms = 10000
+idle_timeout_ms = 60000
+channel_capacity = 128
+numeric_lock = true
+blank_fill = false
+lu_name = "LU01"
+ca_cert = "ca.pem"

@@ -1,0 +1,44 @@
+# Local stack: Hercules MVS 3.8j + bastion3270-server gateway.
+#
+#   podman-compose -f docker/docker-compose.yml up -d --build      (or: docker compose …)
+#   → http://127.0.0.1:8080
+#
+# Only the Hercules service is needed for desktop GUI development:
+#   podman-compose -f docker/docker-compose.yml up -d hercules-tk4
+services:
+  hercules-tk4:
+    # MVS 3.8j TK4- Update 08 with Hercules; pinned, because `latest` is rebuilt.
+    image: docker.io/rattydave/docker-ubuntu-hercules-mvs@sha256:13b053388b37a10812d00316659b5faa36939d44b78197dd86f6e4cdc20fde2a
+    platform: linux/amd64
+    container_name: bastion3270-hercules
+    networks:
+      mainframe:
+        aliases: [hercules]     # bastion3270-server.toml: host = "hercules"
+    ports:
+      - "127.0.0.1:3270:3270"   # TN3270 terminal port
+      - "127.0.0.1:8038:8038"   # Hercules HTTP web console
+    restart: unless-stopped
+
+  bastion3270-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    image: localhost/bastion3270-server:dev
+    container_name: bastion3270-server
+    networks: [mainframe]
+    depends_on: [hercules-tk4]
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./bastion3270-server.toml:/etc/bastion3270/bastion3270-server.toml:ro
+    environment:
+      RUST_LOG: info
+      BASTION3270_LOG_FORMAT: text
+    # Same hardening as the Kubernetes securityContext.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+
+networks:
+  mainframe: {}

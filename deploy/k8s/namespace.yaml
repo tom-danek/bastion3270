@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bastion3270
+  labels:
+    # Enforce the "restricted" Pod Security Standard for everything in this namespace; warn on
+    # `kubectl apply` and record audit annotations too, so a violation is visible before a pod
+    # is rejected.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

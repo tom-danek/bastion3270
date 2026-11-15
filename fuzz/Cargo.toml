@@ -1,0 +1,66 @@
+[package]
+name = "bastion3270-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "libFuzzer targets for the bastion3270 protocol, keyboard and configuration parsers"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+serde_json = "1"
+bastion3270-core = { path = "../crates/bastion3270-core" }
+bastion3270-net = { path = "../crates/bastion3270-net" }
+bastion3270-server = { path = "../crates/bastion3270-server" }
+
+# The fuzz crate is its own workspace, so the main workspace never builds it.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[lib]
+path = "src/lib.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "telnet_inbound"
+path = "fuzz_targets/telnet_inbound.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "datastream"
+path = "fuzz_targets/datastream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyboard"
+path = "fuzz_targets/keyboard.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_message"
+path = "fuzz_targets/client_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "profile_toml"
+path = "fuzz_targets/profile_toml.rs"
+test = false
+doc = false
+bench = false

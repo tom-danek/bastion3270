@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bastion3270-server
+  labels:
+    app.kubernetes.io/name: bastion3270-server
+    app.kubernetes.io/part-of: bastion3270
+spec:
+  # The default InMemorySessionStore keeps sessions in the memory of one pod.
+  # More replicas only work with sticky routing (see gateway.yaml) and a pod restart still
+  # drops its sessions.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bastion3270-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bastion3270-server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: /metrics
+        # Roll pods when the whitelist changes (kustomize/helm can fill a hash in here).
+        bastion3270.io/config-revision: "1"
+    spec:
+      automountServiceAccountToken: false
+      # Give active users time to finish: SIGTERM → /readyz 503 → sessions closed & audited.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: bastion3270-server
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/etc/bastion3270/bastion3270-server.toml"]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics      # [server] metrics_bind, scraped from the monitoring namespace
+              containerPort: 9090
+          env:
+            - name: RUST_LOG
+              value: info
+            - name: BASTION3270_LOG_FORMAT
+              value: json
+          readinessProbe:
+            # With [server.tls] add `scheme: HTTPS` to both probes (the kubelet does not
+            # verify the certificate; with client_ca, the probes need a plain listener or
+            # an exec probe instead).
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+            failureThreshold: 3
+          # Sizing (load tests, simulated hosts and browsers): about 300 KiB of memory per
+          # session plus ~16 MiB, and ~0.13 CPU cores per 1 000 sessions at one Enter every 2 s
+          # per session (~0.15 with TLS to the host and on the gateway's own listener). Set the
+          # memory limit well above max_sessions × 300 KiB.
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }    # max_sessions = 500
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/bastion3270
+              readOnly: true
+            # Corporate CAs for AT-TLS ([host_tls] ca_certs, or ca_cert in one profile):
+            # - name: zos-ca
+            #   mountPath: /etc/bastion3270/pki
+            #   readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: bastion3270-server-config
+        # - name: zos-ca
+        #   secret:
+        #     secretName: bastion3270-zos-ca

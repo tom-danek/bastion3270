@@ -1,0 +1,3 @@
+# `cargo audit` exceptions; keep in sync with `deny.toml` (the CI gate).
+[advisories]
+ignore = []

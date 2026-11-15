@@ -1,0 +1,58 @@
+name: Bug report
+description: Something does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not post screen contents, user ids, passwords, host names or IP addresses of a real
+        system.** Security problems go to *Security → Report a vulnerability* instead.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Web gateway / web client
+        - Desktop client
+        - Container image / Kubernetes manifests
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "0.1.0, or the output of --version"
+    validations:
+      required: true
+  - type: textarea
+    id: host
+    attributes:
+      label: Host side
+      description: z/OS (and its TN3270 server), Hercules or another emulator; TN3270 or TN3270E; terminal model; code page; TLS or plain TCP.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system; for the web client the browser and version; for the gateway the deployment (container, Kubernetes, ingress).
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behaviour
+      description: If another 3270 emulator (e.g. x3270 / wc3270) behaves differently, describe how.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: Relevant lines, at RUST_LOG=debug if possible. Check them for host names and user ids before posting.
+      render: text

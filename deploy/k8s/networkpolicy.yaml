@@ -1,0 +1,54 @@
+# Least-privilege network access for the gateway pods.
+#
+# * Ingress: only the data-plane pods of the Gateway API controller (here Envoy Gateway's proxies
+#   in namespace `envoy-gateway-system`), so no other pod can bypass TLS or header buffering.
+#   Kubelet probes come from the node and are not filtered by NetworkPolicy in common CNIs.
+# * Egress: DNS only to the cluster DNS, TN3270 only to the mainframe addresses. This is the
+#   second line of defence against SSRF: even a bug in the profile whitelist cannot reach
+#   anything else.
+#
+# Adjust before use: the namespace and labels of your controller's proxy pods, and the
+# addresses of your z/OS TN3270 servers. The mainframe block below is a documentation address
+# (RFC 5737) on purpose: until it is replaced, the gateway reaches no host (fails closed).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bastion3270-server
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bastion3270-server
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: envoy
+      ports:
+        - { port: 8080, protocol: TCP }
+    - from:             # Prometheus: adjust to your monitoring namespace
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - { port: 9090, protocol: TCP }
+  egress:
+    - to:             # cluster DNS
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:             # z/OS TN3270 servers: replace with the real addresses (one /32 each)
+        - ipBlock: { cidr: 192.0.2.10/32 }
+      ports:
+        - { port: 23, protocol: TCP }
+        - { port: 992, protocol: TCP }
+        - { port: 3270, protocol: TCP }

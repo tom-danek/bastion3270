@@ -1,0 +1,198 @@
+# Release builds of the desktop client. Runs only when a version tag is pushed
+# (`git tag -a v0.1.0 -m "bastion3270 0.1.0" && git push origin v0.1.0`), never on normal pushes.
+# Started by hand (Actions → release → Run workflow) it builds and keeps the archives as workflow
+# artifacts without creating a release — a dry run.
+#
+# * The tag must match the workspace version in `Cargo.toml`.
+# * Each platform builds on its own native runner and also runs the tests of the crates the client
+#   is made of, so the client is tested on Windows and macOS too, not only on Linux.
+# * Release builds start from a clean state (no build cache), so a cache entry can never end up
+#   in a shipped binary.
+# * Every archive contains THIRD_PARTY_LICENSES: the licence texts of all third-party crates in
+#   the binary (cargo-about, `about.toml`), as their licences require for binary distribution.
+# * Every platform gets a CycloneDX SBOM (`*.cdx.json`, cargo-cyclonedx) as a release asset.
+# * The result is a draft release with the archives, the SBOMs and `SHA256SUMS`; it is published
+#   by hand after the notes have been read.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Licence texts and SBOMs come from Cargo.lock alone (no build): one job for all platforms.
+  notices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - name: Tools
+        run: |
+          cargo install --locked cargo-about --version 0.9.3 --features cli
+          cargo install --locked cargo-cyclonedx --version 0.5.9
+      - name: Third-party licences
+        run: |
+          mkdir -p notices sbom
+          cargo about generate --locked -m crates/bastion3270-gui/Cargo.toml about.hbs \
+            -o notices/THIRD_PARTY_LICENSES
+      - name: SBOMs
+        # One per platform of the build matrix below (keep the two lists in step).
+        run: |
+          for entry in x86_64-unknown-linux-gnu:linux-x86_64 aarch64-apple-darwin:macos-arm64; do
+            # Windows is disabled in the matrix; add x86_64-pc-windows-msvc:windows-x86_64 with it.
+            target=${entry%%:*}
+            platform=${entry##*:}
+            cargo cyclonedx -q -f json --spec-version 1.5 --describe binaries --no-build-deps \
+              --target "$target" --manifest-path crates/bastion3270-gui/Cargo.toml
+            mv crates/bastion3270-gui/bastion3270-gui_bin.cdx.json \
+              "sbom/bastion3270-gui-${GITHUB_REF_NAME}-${platform}.cdx.json"
+            find crates -name '*.cdx.json' -delete
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notices
+          path: notices/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom/*
+          if-no-files-found: error
+
+  build:
+    needs: notices
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported Ubuntu runner: the binary links against its glibc, so an older
+          # glibc keeps the binary running on more distributions.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x86_64
+          # Disabled for now: Windows runners count double against the Actions minutes quota.
+          # Uncomment to build the Windows archive again.
+          # - os: windows-latest
+          #   target: x86_64-pc-windows-msvc
+          #   platform: windows-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Oldest macOS release the binary runs on.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notices
+          path: notices
+      - name: Tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
+            exit 1
+          fi
+      - name: Desktop client build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - name: Tests
+        # --no-fail-fast: one run shows every failing test binary, not only the first.
+        run: cargo test --locked --no-fail-fast -p bastion3270-core -p bastion3270-net -p bastion3270-gui
+      - name: Build
+        run: cargo build --locked --release -p bastion3270-gui --target ${{ matrix.target }}
+      # Linux: binary in a .tar.gz. Windows: .exe in a .zip. macOS: an application bundle
+      # (bastion3270.app, so a double click does not open a Terminal window) with its icon, in a
+      # .zip made by `ditto`, which keeps the bundle's metadata. The bundle gets an ad-hoc signature: not a
+      # trusted identity, but it seals the bundle so macOS does not report it as damaged.
+      - name: Package
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          name="bastion3270-gui-${GITHUB_REF_NAME}-${{ matrix.platform }}"
+          bin="target/${{ matrix.target }}/release/bastion3270-gui"
+          mkdir -p "dist/$name"
+          cp LICENSE NOTICE THIRD_PARTY_NOTICES notices/THIRD_PARTY_LICENSES README.md "dist/$name/"
+          case "$RUNNER_OS" in
+            Linux)
+              cp "$bin" "dist/$name/"
+              tar -czf "dist/$name.tar.gz" -C dist "$name"
+              ;;
+            Windows)
+              cp "$bin.exe" "dist/$name/"
+              (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
+              ;;
+            macOS)
+              app="dist/$name/bastion3270.app"
+              mkdir -p "$app/Contents/MacOS"
+              cp "$bin" "$app/Contents/MacOS/"
+              # The bundle's icon (Finder, Launchpad): every size of an .iconset, from the
+              # 512-pixel PNG of the web client.
+              iconset="$RUNNER_TEMP/bastion3270.iconset"
+              mkdir -p "$iconset" "$app/Contents/Resources"
+              for size in 16 32 128 256 512; do
+                sips -z "$size" "$size" crates/bastion3270-server/web/icon-512.png \
+                  --out "$iconset/icon_${size}x${size}.png" > /dev/null
+                if [ "$size" -le 256 ]; then
+                  double=$((size * 2))
+                  sips -z "$double" "$double" crates/bastion3270-server/web/icon-512.png \
+                    --out "$iconset/icon_${size}x${size}@2x.png" > /dev/null
+                fi
+              done
+              iconutil -c icns "$iconset" -o "$app/Contents/Resources/bastion3270.icns"
+              sed "s/@VERSION@/$version/g" crates/bastion3270-gui/macos/Info.plist > "$app/Contents/Info.plist"
+              plutil -lint "$app/Contents/Info.plist"
+              codesign --force --sign - "$app"
+              codesign --verify --strict "$app"
+              ditto -c -k --keepParent "dist/$name" "dist/$name.zip"
+              ;;
+          esac
+          rm -r "dist/$name"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      # The licence texts are inside every archive; not a release asset of their own.
+      - name: Drop the shared notices
+        run: rm dist/THIRD_PARTY_LICENSES
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes \
+            --title "bastion3270 ${GITHUB_REF_NAME#v}"

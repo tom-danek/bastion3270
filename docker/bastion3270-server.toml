@@ -1,0 +1,94 @@
+# bastion3270-server configuration.
+# In Kubernetes this file is mounted from a ConfigMap (deploy/k8s/configmap.yaml).
+#
+# Validate with:  bastion3270-server --check-config docker/bastion3270-server.toml
+
+[server]
+bind = "0.0.0.0:8080"
+# Empty = same-origin only. Behind an ingress with a public hostname, list it explicitly:
+# allowed_origins = ["https://tn3270.example.internal"]
+allowed_origins = []
+# Ingress address ranges whose X-Forwarded-For / X-Forwarded-Proto are believed (browser address
+# in the audit, scheme in the origin check). Empty = headers ignored.
+# trusted_proxies = ["10.0.0.0/8"]
+# Prometheus metrics on a separate listener (GET /metrics); keep it off the browser-facing network.
+# metrics_bind = "0.0.0.0:9090"
+
+# HTTPS / WSS on this listener (e.g. encrypted ingress → pod hop). With client_ca, only clients
+# with a certificate signed by that CA (the ingress) are served: mutual TLS.
+# [server.tls]
+# cert = "/etc/bastion3270/tls/tls.crt"       # certificate + intermediates (PEM)
+# key = "/etc/bastion3270/tls/tls.key"
+# client_ca = "/etc/bastion3270/tls/ingress-ca.crt"
+
+[limits]
+max_sessions = 500              # per pod
+max_sessions_per_identity = 4   # authenticated identities only (anonymous: max_sessions)
+detach_grace_secs = 300         # session survives F5 / Wi-Fi drop for 5 minutes
+reaper_interval_secs = 15
+max_ws_message_bytes = 16384
+max_paste_chars = 2048
+max_messages_per_second = 200
+max_connections = 1024          # HTTP connections that are not (yet) a WebSocket
+max_pending_handshakes = 64     # WebSockets waiting for their first message
+header_read_timeout_secs = 10   # slow-loris: a request head must arrive within this time
+ping_interval_secs = 25         # a browser silent for two intervals is detached
+max_session_lifetime_secs = 43200  # 12 h, however active the session is
+idle_timeout_secs = 1800         # 30 min without operator input (NIST SP 800-63B AAL2)
+max_tabs_per_page = 4           # session tabs of the web client in one browser page
+
+[auth]
+# "none"         — users log on at the RACF / TSO screen (default)
+# "static-token" — bearer tokens; store only SHA-256 hashes here:
+#                  printf %s "$TOKEN" | bastion3270-server --hash-token
+mode = "none"
+
+# [[auth.tokens]]
+# subject  = "sysprog"
+# sha256   = "<64 hex chars>"
+# profiles = ["hercules"]   # empty = all profiles
+
+# ─── Connections users define themselves (host, port, TLS) ───────────────────────
+# Enabled by default and then reaching ANY host and port from the gateway's network position.
+# [custom_connections]
+# enabled = false                               # offer no "New connection"
+# allowed_targets = ["10.20.0.0/16:23,992", "*.zos.example.com:992", "hercules:3270"]
+# allow_plain = false                           # TLS only
+# allow_paste = true
+# allow_copy = true
+
+# ─── Trust in the hosts' TLS certificates ────────────────────────────────────────
+# The Mozilla roots and the system store are always trusted (the container has none of its
+# own). Your organisation's CAs, once for every profile and every custom connection; a file
+# may also hold an intermediate a host does not send.
+# [host_tls]
+# ca_certs = ["/etc/bastion3270/pki/bank-root-ca.pem"]
+
+# ─── LPAR whitelist: the profiles users pick from ────────────────────────────────
+[[profiles]]
+id = "hercules"
+name = "Hercules MVS 3.8j (TK4-)"
+description = "Local MVS 3.8j Turnkey emulator (docker compose service 'hercules')"
+allow_paste = true
+allow_copy = true
+keyboard = "x3270"              # web client key layout: "x3270" or "pcomm"; users may switch
+# allowed_lu_names = ["TSO0*", "CICS01"]   # LU names users may request; absent = any, [] = none
+
+[profiles.connection]
+host = "hercules"
+port = 3270
+tls_mode = "disabled"
+# With TLS: ca_cert = "/etc/bastion3270/pki/lpar-ca.pem"  (adds to the trusted CAs)
+#           accept_hostname = "zos1.bank.example"       (the certificate's name, when connecting
+#                                                        by address or alias)
+terminal_model = "Model4"
+color_3279 = true
+extended = true
+codepage = "cp037"
+numeric_lock = false            # true: only digits + - . , in numeric fields
+blank_fill = true               # typing after empty field positions turns them into spaces
+connect_timeout_ms = 10000
+idle_timeout_ms = 1800000       # 30 min host silence (TSO idle) before the session is dropped
+write_timeout_ms = 30000        # a host that stops reading ends the session
+negotiation_timeout_ms = 30000  # connect → completed Telnet negotiation
+channel_capacity = 128

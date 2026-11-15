@@ -1,0 +1,24 @@
+THIRD-PARTY LICENSES
+====================
+
+This binary contains the following third-party Rust crates. Their licences are reproduced
+below as required by their terms. The licence of bastion3270 itself is in LICENSE and NOTICE;
+notices for code derived from x3270 are in THIRD_PARTY_NOTICES.
+
+Overview
+--------
+{{#each overview}}
+* {{{name}}}: {{count}} crate(s)
+{{/each}}
+
+{{#each licenses}}
+===============================================================================
+{{{name}}} — used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+===============================================================================
+
+{{{text}}}
+
+{{/each}}

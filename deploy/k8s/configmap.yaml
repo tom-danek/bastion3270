@@ -1,0 +1,49 @@
+# The LPAR whitelist lives here. It contains no secrets: static tokens are stored as SHA-256
+# hashes only, and the gateway never needs mainframe passwords.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bastion3270-server-config
+data:
+  bastion3270-server.toml: |
+    [server]
+    bind = "0.0.0.0:8080"
+    allowed_origins = ["https://tn3270.example.internal"]
+    # The Gateway API proxies (pod network): the audit then records the browser's address from
+    # X-Forwarded-For, and the same-origin check also compares the scheme.
+    # trusted_proxies = ["10.244.0.0/16"]   # TODO: your pod CIDR (or the proxies' subnet)
+    metrics_bind = "0.0.0.0:9090"            # Prometheus only (NetworkPolicy: monitoring namespace)
+
+    [limits]
+    max_sessions = 500
+    max_sessions_per_identity = 4
+    detach_grace_secs = 300
+
+    # Connections users define themselves are enabled by default and then reach any host and
+    # port the pod can reach (the NetworkPolicy limits egress). Restrict or switch them off:
+    # [custom_connections]
+    # allowed_targets = ["10.20.0.0/16:23,992"]   # TODO: your TN3270 servers
+    # allow_plain = false
+
+    # The hosts' TLS certificates: trust your organisation's CA (Secret bastion3270-zos-ca,
+    # mounted in deployment.yaml) for every profile and custom connection.
+    # [host_tls]
+    # ca_certs = ["/etc/bastion3270/pki/ca.crt"]   # TODO: your CA
+
+    [auth]
+    mode = "none"
+
+    [[profiles]]
+    id = "zos-prod"
+    name = "IBM z/OS Production (AT-TLS)"
+    description = "TN3270E over TLS 1.2/1.3"
+    allow_paste = true
+    allow_copy = true
+
+    [profiles.connection]
+    host = "zos.example.internal"
+    port = 992
+    tls_mode = "enabled"
+    terminal_model = "Model4"
+    codepage = "cp037"
+    idle_timeout_ms = 1800000

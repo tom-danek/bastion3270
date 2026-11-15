@@ -1,0 +1,96 @@
+[workspace]
+resolver = "2"
+exclude = ["fuzz"]
+members = [
+    "crates/bastion3270-core",
+    "crates/bastion3270-net",
+    "crates/bastion3270-server",
+    "crates/bastion3270-gui",
+    "crates/bastion3270-loadgen",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# Oldest Rust release the workspace is built and checked with.
+rust-version = "1.99"
+license = "Apache-2.0"
+repository = "https://github.com/tom-danek/bastion3270"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# Zero-Panic Policy: forbid crashing on untrusted network or user input
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+fallible_impl_from = "deny"
+# Code quality & defensive programming
+pedantic = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+
+[workspace.dependencies]
+# Internal workspace crates
+bastion3270-core = { path = "crates/bastion3270-core" }
+bastion3270-net = { path = "crates/bastion3270-net" }
+bastion3270-server = { path = "crates/bastion3270-server" }
+
+# Asynchronous runtime
+tokio = { version = "1", features = ["full"] }
+
+# TLS and PKI: the `ring` provider only (aws-lc-rs would need CMake and NASM to build).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pki-types = "1"
+webpki-roots = "1"
+# The operating system's certificate store (trust anchors only; verification stays webpki).
+rustls-native-certs = "0.8"
+# Details of a refused host certificate and the common-name check (no `verify` feature).
+x509-parser = "0.18"
+
+# Serialization & Config
+serde = { version = "1.0", features = ["derive"] }
+toml = "1"
+
+serde_json = "1"
+
+# Diagnostics & Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Web gateway
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+# Served without axum::serve, so the HTTP/1 connection gets a timer (header read timeout).
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+getrandom = "0.4"
+sha2 = "0.11"
+zeroize = "1"
+
+# Native GUI
+# The symbol and emoji fonts are optional since egui 0.37; the client's icons need them.
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "glow", "wayland", "x11"] }
+
+# Testing / Hermetic Mock Server & Dev certificate generation
+rcgen = "0.14"
+# Same version as axum uses (no second copy); upgrade together with axum.
+tokio-tungstenite = "0.29"
+# WebDriver client for the browser tests of the web client (dev only). No driver download
+# manager and no TLS: the WebDriver server is always on localhost over plain HTTP. `cdp` (no
+# extra dependency) asks Chrome whether the client can be installed as an application.
+thirtyfour = { version = "0.38", default-features = false, features = ["cdp", "reqwest"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+# Benchmarks of the hot paths (`cargo bench`); no plotting or HTML report stack.
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
