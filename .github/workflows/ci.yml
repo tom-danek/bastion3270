@@ -11,11 +11,10 @@
 name: ci
 
 on:
-  # Disabled for now to conserve Actions minutes; uncomment to run on every push to main.
-  # push:
-  #   branches: [main]
-  # schedule:
-  #   - cron: "17 5 * * 1"   # Monday 05:17 UTC
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * 1"   # Monday 05:17 UTC
   pull_request:
   workflow_dispatch:
 

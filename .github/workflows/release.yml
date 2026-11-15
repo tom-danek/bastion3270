@@ -79,11 +79,9 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
-          # Disabled for now: Windows runners count double against the Actions minutes quota.
-          # Uncomment to build the Windows archive again.
-          # - os: windows-latest
-          #   target: x86_64-pc-windows-msvc
-          #   platform: windows-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
             platform: macos-arm64
