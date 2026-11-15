@@ -147,8 +147,9 @@ log lines with target `bastion3270::audit`; ship them to your SIEM. Screen conte
 passwords are never logged.
 
 Sizing: about 16 MiB + 300 KiB per session and 0.13 CPU cores per 1 000 sessions at one Enter
-every 2 s per session (0.15 with TLS on both sides); see [ARCHITECTURE.md](ARCHITECTURE.md)
-§4.6.
+every 2 s per session (0.15 with TLS on both sides). Set the memory limit for about 600 KiB
+per session: after many sessions end and start again at once (session lifetime, host restart)
+memory can stay near that for hours. See [ARCHITECTURE.md](ARCHITECTURE.md) §4.6.
 
 ## 7. Client addresses behind the Gateway
 

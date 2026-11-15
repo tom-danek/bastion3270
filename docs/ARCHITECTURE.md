@@ -195,4 +195,8 @@ Sizing (load tests with simulated hosts and browsers, one Enter every 2 s per se
 5 000 sessions on one process without errors, the gateway adding about 1.5 ms to the host's
 response time; about 300 KiB of memory per session and 0.13 CPU cores per 1 000 sessions.
 With TLS to the host and on the gateway's own listener the latency is the same, memory about
-13 % and CPU about 20 % higher (0.15 cores per 1 000 sessions).
+13 % and CPU about 20 % higher (0.15 cores per 1 000 sessions). Over 12 hours with every session
+ended by the session lifetime and opened again twice, there were no errors and memory and file
+descriptors did not grow. When many sessions end and new ones start at the same time, the
+allocator keeps the freed memory for a while: memory then stayed near 550 KiB per session for
+hours before it fell back. Size memory limits for about 600 KiB per session.

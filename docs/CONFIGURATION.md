@@ -69,7 +69,8 @@ ingress to the pod):
 | `max_messages_per_second` | `200` | Messages per second and connection (flood protection). |
 
 All values must be greater than zero. Sizing: about 16 MiB plus 300 KiB per session and
-0.13 CPU cores per 1 000 sessions (see [ARCHITECTURE.md](ARCHITECTURE.md) §4.6).
+0.13 CPU cores per 1 000 sessions; set memory limits for about 600 KiB per session (see
+[ARCHITECTURE.md](ARCHITECTURE.md) §4.6).
 
 ### 1.3 `[auth]`
 

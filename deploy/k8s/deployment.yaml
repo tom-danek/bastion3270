@@ -63,7 +63,8 @@ spec:
           # Sizing (load tests, simulated hosts and browsers): about 300 KiB of memory per
           # session plus ~16 MiB, and ~0.13 CPU cores per 1 000 sessions at one Enter every 2 s
           # per session (~0.15 with TLS to the host and on the gateway's own listener). Set the
-          # memory limit well above max_sessions × 300 KiB.
+          # memory limit for at least max_sessions × 600 KiB: after many sessions end and start
+          # again at once (session lifetime, host restart) memory can stay near that for hours.
           resources:
             requests: { cpu: 100m, memory: 192Mi }    # max_sessions = 500
             limits: { memory: 512Mi }
