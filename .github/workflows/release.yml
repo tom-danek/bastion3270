@@ -222,7 +222,7 @@ jobs:
         with:
           name: notices-gateway
           path: notices
-      - name: Tag matches the crate version
+      - name: Tag matches the crate version and the image of the examples
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
@@ -230,6 +230,11 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
             exit 1
           fi
+          # The quick start and the Kubernetes example run the image of this release.
+          grep -q "image: ghcr.io/.*/bastion3270-server:$version\$" docker/docker-compose.yml \
+            || { echo "::error::docker/docker-compose.yml does not use the image $version"; exit 1; }
+          grep -q "newTag: $version\$" deploy/k8s/kustomization.yaml \
+            || { echo "::error::deploy/k8s/kustomization.yaml does not use the image $version"; exit 1; }
       # A BuildKit builder of its own: keeps the build stage between the binary and the image,
       # and can attach an SBOM and provenance to the image.
       - name: Builder

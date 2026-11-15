@@ -1,7 +1,9 @@
-# Local stack: Hercules MVS 3.8j + bastion3270-server gateway.
+# Local stack: Hercules MVS 3.8j + the bastion3270-server gateway (the published image).
 #
-#   podman-compose -f docker/docker-compose.yml up -d --build      (or: docker compose …)
+#   podman-compose -f docker/docker-compose.yml up -d      (or: docker compose …)
 #   → http://127.0.0.1:8080
+#
+# The gateway built from this checkout instead: add docker/docker-compose.build.yml.
 #
 # Only the Hercules service is needed for desktop GUI development:
 #   podman-compose -f docker/docker-compose.yml up -d hercules-tk4
@@ -20,10 +22,8 @@ services:
     restart: unless-stopped
 
   bastion3270-server:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.server
-    image: localhost/bastion3270-server:dev
+    # The release of this version (the release workflow checks that the tag matches).
+    image: ghcr.io/tom-danek/bastion3270-server:0.1.0
     container_name: bastion3270-server
     networks: [mainframe]
     depends_on: [hercules-tk4]

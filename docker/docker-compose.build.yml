@@ -1,0 +1,9 @@
+# The gateway built from this checkout instead of the published image:
+#
+#   podman-compose -f docker/docker-compose.yml -f docker/docker-compose.build.yml up -d --build
+services:
+  bastion3270-server:
+    image: localhost/bastion3270-server:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
