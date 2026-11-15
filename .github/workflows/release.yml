@@ -93,11 +93,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The oldest supported Ubuntu runner: the binary links against its glibc, so an older
-          # glibc keeps the binary running on more distributions.
-          - os: ubuntu-22.04
+          # Linked with zig against glibc 2.28 (the `.2.28` suffix of cargo-zigbuild), whatever the
+          # runner's glibc: the binary runs on RHEL 8 / 9 and their rebuilds, SLES 15, Debian 11+,
+          # Ubuntu 20.04+. Checked below by symbol versions and by starting it on Rocky Linux.
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
+            glibc: "2.28"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: windows-x86_64
@@ -139,8 +141,42 @@ jobs:
       - name: Tests
         # --no-fail-fast: one run shows every failing test binary, not only the first.
         run: cargo test --locked --no-fail-fast -p bastion3270-core -p bastion3270-net -p bastion3270-gui
+      # Zig from its official download (pinned version and checksum) as the linker, driven by
+      # cargo-zigbuild. Ubuntu's glibc headers are not used, so they cannot mix with zig's.
+      - name: Zig linker
+        if: matrix.glibc
+        run: |
+          zig=zig-x86_64-linux-0.17.1
+          curl -fsSLO "https://ziglang.org/download/0.17.1/$zig.tar.xz"
+          echo "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a  $zig.tar.xz" | sha256sum -c
+          tar -xJf "$zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$zig" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version 0.24.1
       - name: Build
-        run: cargo build --locked --release -p bastion3270-gui --target ${{ matrix.target }}
+        run: |
+          if [ -n "${{ matrix.glibc }}" ]; then
+            cargo zigbuild --locked --release -p bastion3270-gui --target "${{ matrix.target }}.${{ matrix.glibc }}"
+          else
+            cargo build --locked --release -p bastion3270-gui --target ${{ matrix.target }}
+          fi
+      # No symbol newer than the promised glibc, and the client opens its window on the oldest
+      # and on the current RHEL release, as Rocky Linux (Xvfb, Mesa software rendering).
+      - name: Runs on older distributions
+        if: matrix.glibc
+        run: |
+          bin="target/${{ matrix.target }}/release/bastion3270-gui"
+          newest=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "newest glibc symbol: $newest"
+          highest=$(printf '%s\n' "$newest" "GLIBC_${{ matrix.glibc }}" | sort -V | tail -1)
+          if [ "$highest" != "GLIBC_${{ matrix.glibc }}" ]; then
+            echo "::error::the client needs $newest, more than glibc ${{ matrix.glibc }}"
+            exit 1
+          fi
+          for image in docker.io/rockylinux/rockylinux:8 docker.io/rockylinux/rockylinux:9; do
+            echo "::group::$image"
+            tools/desktop-smoke.sh "$bin" "$image"
+            echo "::endgroup::"
+          done
       # Linux: binary in a .tar.gz. Windows: .exe in a .zip. macOS: an application bundle
       # (bastion3270.app, so a double click does not open a Terminal window) with its icon, in a
       # .zip made by `ditto`, which keeps the bundle's metadata. The bundle gets an ad-hoc signature: not a
@@ -230,11 +266,13 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
             exit 1
           fi
-          # The quick start and the Kubernetes example run the image of this release.
+          # The quick start, the Kubernetes example and the README use the image of this release.
           grep -q "image: ghcr.io/.*/bastion3270-server:$version\$" docker/docker-compose.yml \
             || { echo "::error::docker/docker-compose.yml does not use the image $version"; exit 1; }
           grep -q "newTag: $version\$" deploy/k8s/kustomization.yaml \
             || { echo "::error::deploy/k8s/kustomization.yaml does not use the image $version"; exit 1; }
+          grep -q "docker pull ghcr.io/.*/bastion3270-server:$version " README.md \
+            || { echo "::error::README.md does not pull the image $version"; exit 1; }
       # A BuildKit builder of its own: keeps the build stage between the binary and the image,
       # and can attach an SBOM and provenance to the image.
       - name: Builder

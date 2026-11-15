@@ -273,7 +273,9 @@ Dockerfile, `.dockerignore` or `Cargo.lock` changes. Actions are pinned to commi
 workflow token is read-only and every job has a time limit.
 
 **Releases** (`.github/workflows/release.yml`) are built only from a version tag, never from a
-normal push. The tag must match the workspace version in `Cargo.toml`:
+normal push. The tag must match the workspace version in `Cargo.toml`, and the image tag in
+`docker/docker-compose.yml`, `deploy/k8s/kustomization.yaml` and the `docker pull` line of the
+README must name the same version (the workflow refuses the tag otherwise):
 
 ```bash
 git tag -a v0.1.0 -m "bastion3270 0.1.0"
@@ -282,6 +284,9 @@ git push origin v0.1.0
 
 The desktop client is built and tested on native runners for Linux (x86_64, `.tar.gz`), Windows
 (x86_64, `.zip`) and macOS (Apple Silicon, `bastion3270.app` in a `.zip`), without a build cache.
+The Linux client is linked with zig (`cargo zigbuild --target x86_64-unknown-linux-gnu.2.28`)
+against glibc 2.28, so it runs on RHEL 8 and later; the workflow checks the binary's glibc
+symbol versions and starts it on Rocky Linux 8 and 9 under Xvfb (`tools/desktop-smoke.sh`).
 The gateway is built by its container build on a native runner per architecture (x86_64, arm64):
 the `binary` stage of `docker/Dockerfile.server` becomes the release archive, and on a tag the
 same build is pushed to `ghcr.io/tom-danek/bastion3270-server` with an SBOM and build
