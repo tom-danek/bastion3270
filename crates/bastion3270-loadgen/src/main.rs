@@ -211,6 +211,8 @@ async fn load(cfg: LoadConfig, pid: Option<u32>, every: Duration) -> ExitCode {
     let reopen = cfg.reopen;
     let idle = pid.and_then(proc::sample);
     let mut last = pid.and_then(proc::sample).map(|s| (Instant::now(), s));
+    // Sessions open when `last` was sampled.
+    let mut open_at_last = 0;
     let report = run(cfg, every, |r| {
         let mut line = r.to_string();
         if let Some(now) = pid.and_then(proc::sample) {
@@ -223,20 +225,17 @@ async fn load(cfg: LoadConfig, pid: Option<u32>, every: Duration) -> ExitCode {
                 now.1.fds
             );
             last = Some(now);
+            open_at_last = r.active;
         }
         println!("{line}");
     })
     .await;
     println!("final: {report}");
     if let (Some(idle), Some(end)) = (idle, last) {
-        let per_session = end
-            .1
-            .rss_kib
-            .saturating_sub(idle.rss_kib)
-            .checked_div(report.opened.max(1))
-            .unwrap_or(0);
+        let per_session = proc::kib_per_session(idle, end.1, open_at_last);
         println!(
-            "gateway rss idle={}MiB end={}MiB (~{per_session} KiB per session, at the last sample)",
+            "gateway rss idle={}MiB end={}MiB (~{per_session} KiB per session, \
+             {open_at_last} open at the last sample)",
             idle.rss_kib / 1024,
             end.1.rss_kib / 1024
         );

@@ -48,6 +48,17 @@ pub fn cpu_cores(before: (Instant, Sample), after: (Instant, Sample)) -> f64 {
     ticks / 100.0 / wall.as_secs_f64()
 }
 
+/// Memory per session in KiB: the growth of `at` over the `idle` process, divided by the
+/// sessions open when `at` was taken. Not by all sessions opened during the run: with
+/// `--reopen` that count keeps growing while the sessions in memory stay the same.
+#[must_use]
+pub fn kib_per_session(idle: Sample, at: Sample, sessions_open: u64) -> u64 {
+    at.rss_kib
+        .saturating_sub(idle.rss_kib)
+        .checked_div(sessions_open)
+        .unwrap_or(0)
+}
+
 /// The soft limit of open files of this process, if readable.
 #[must_use]
 pub fn open_files_limit() -> Option<u64> {
@@ -57,4 +68,30 @@ pub fn open_files_limit() -> Option<u64> {
         .find(|l| l.starts_with("Max open files"))
         .and_then(|l| l.split_whitespace().nth(3))
         .and_then(|v| v.parse().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rss(mib: u64) -> Sample {
+        Sample {
+            rss_kib: mib * 1024,
+            cpu_ticks: 0,
+            fds: 0,
+        }
+    }
+
+    /// The 12 h soak: 7 MiB idle, 441 MiB at the last sample with 1000 sessions open, 3000
+    /// opened over the run (two renewals). The report must say ~444 KiB, not ~148 KiB.
+    #[test]
+    fn memory_per_session_counts_the_sessions_open_at_the_sample() {
+        assert_eq!(kib_per_session(rss(7), rss(441), 1000), 444);
+    }
+
+    #[test]
+    fn memory_per_session_without_open_sessions_is_zero() {
+        assert_eq!(kib_per_session(rss(7), rss(441), 0), 0);
+        assert_eq!(kib_per_session(rss(441), rss(7), 1000), 0);
+    }
 }
