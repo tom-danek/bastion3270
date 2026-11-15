@@ -275,7 +275,11 @@ git push origin v0.1.0
 
 The desktop client is built and tested on native runners for Linux (x86_64, `.tar.gz`), Windows
 (x86_64, `.zip`) and macOS (Apple Silicon, `bastion3270.app` in a `.zip`), without a build cache.
-The archives and their `SHA256SUMS` are attached to a draft release, which is published by hand.
+The gateway is built by its container build on a native runner per architecture (x86_64, arm64):
+the `binary` stage of `docker/Dockerfile.server` becomes the release archive, and on a tag the
+same build is pushed to `ghcr.io/tom-danek/bastion3270-server` with an SBOM and build
+provenance, joined into one image under the version and `latest`. The archives, the SBOMs and
+`SHA256SUMS` are attached to a draft release, which is published by hand.
 The binaries are not code-signed with a trusted identity yet. On macOS the first start is
 refused; allow it in System Settings → Privacy & Security → Open Anyway, or remove the download
 flag with `xattr -dr com.apple.quarantine bastion3270.app`. Windows SmartScreen asks too (More

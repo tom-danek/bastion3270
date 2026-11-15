@@ -12,7 +12,7 @@ Fill in every `TODO` of `deploy/k8s/`:
 
 | File | What |
 | :--- | :--- |
-| `kustomization.yaml` | The image registry and tag. |
+| `kustomization.yaml` | The image and its tag: the published `ghcr.io/tom-danek/bastion3270-server`, or your mirror of it. |
 | `gateway.yaml` | `gatewayClassName` of your Gateway API controller, the host name, the TLS Secret `bastion3270-tls` (type `kubernetes.io/tls`). With a shared platform Gateway: delete the Gateway and point the routes' `parentRefs` at it. |
 | `configmap.yaml` | The profiles (one per LPAR / TN3270 server), `allowed_origins` (the public URL), `trusted_proxies` (§7), the authentication mode. Users may choose the terminal model, code page and LU name of a session; where the LU is a terminal identity on the host (RACF terminal rules, CICS terminal ids), restrict it per profile with `allowed_lu_names` (exact names or prefixes ending in `*`; `[]` allows none). |
 | `networkpolicy.yaml` | The addresses of the TN3270 servers (one `/32` each; the example address reaches nothing) and the namespace / labels of your controller's proxy pods. |

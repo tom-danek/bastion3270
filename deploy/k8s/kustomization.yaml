@@ -5,8 +5,9 @@
 # Verified with kind (Kubernetes 1.37) and Envoy Gateway 1.9 (Gateway API v1): PodSecurity
 # `restricted`, HTTPS / WSS through the Gateway, HTTP → HTTPS redirect, HSTS, NetworkPolicy
 # (ingress only from the proxies, egress only to the mainframe), rolling restart under load.
-# Before use, fill in the TODOs: registry, GatewayClass, host name and certificate, mainframe
-# addresses in networkpolicy.yaml, the profiles in configmap.yaml.
+# Before use, fill in the TODOs: GatewayClass, host name and certificate, mainframe addresses in
+# networkpolicy.yaml, the profiles in configmap.yaml. The image is the published one; point
+# `newName` at your own registry if you mirror it.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: bastion3270
@@ -19,5 +20,5 @@ resources:
   - gateway.yaml
 images:
   - name: bastion3270-server
-    newName: ghcr.io/example/bastion3270-server   # TODO: your registry
+    newName: ghcr.io/tom-danek/bastion3270-server
     newTag: 0.1.0
