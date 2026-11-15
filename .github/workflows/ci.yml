@@ -1,21 +1,27 @@
 # Continuous integration. Third-party actions are pinned to commit SHAs (the tag is noted next to
-# each) and the workflow token is read-only.
+# each), the workflow token is read-only and checkouts keep no credentials.
 #
-# * Every push to main and every pull request: one job on one runner (one build, one cache) —
-#   formatting, clippy, tests (incl. property tests), supply-chain policy and the web client tests
-#   in Chrome and Firefox.
-# * On demand (Actions → ci → Run workflow, e.g. before a release): additionally Edge, a short
-#   fuzzing run per target and the container build. Long fuzzing campaigns run locally
-#   (`fuzz/campaign.sh`).
-# * Weekly: only the advisory check, so a vulnerability published between pushes is noticed.
+# * Every push to main and every pull request that changes more than documentation:
+#   formatting, clippy, tests (incl. property tests), supply-chain policy and the web client
+#   tests in Chrome and Firefox; the tests of the desktop client's crates on Windows and macOS;
+#   a build with the oldest supported Rust (`rust-version` in Cargo.toml).
+# * Weekly: the advisory check, so a vulnerability published between pushes is noticed, and a
+#   short fuzzing run per target.
+# * On demand (Actions → ci → Run workflow, e.g. before a release): additionally Edge and the
+#   fuzzing run. Long fuzzing campaigns run locally (`fuzz/campaign.sh`).
+# The container build has its own workflow (container.yml).
 name: ci
 
+# Documentation alone does not need a build. docs/CONFIGURATION.md stays in: a test reads its
+# profile example. (Later patterns override earlier ones.)
 on:
   push:
     branches: [main]
+    paths: ["**", "!**.md", "!docs/**", "docs/CONFIGURATION.md", "!.github/ISSUE_TEMPLATE/**"]
+  pull_request:
+    paths: ["**", "!**.md", "!docs/**", "docs/CONFIGURATION.md", "!.github/ISSUE_TEMPLATE/**"]
   schedule:
     - cron: "17 5 * * 1"   # Monday 05:17 UTC
-  pull_request:
   workflow_dispatch:
 
 # A newer push supersedes a running check of the same branch (the weekly run has its own
@@ -34,8 +40,13 @@ jobs:
   check:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    # A normal run takes about 5 minutes; a hung browser test must not hold the runner for the
+    # default 6 hours.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Desktop client build dependencies
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -74,11 +85,61 @@ jobs:
         if: failure()
         run: cat chromedriver.log geckodriver.log || true
 
+  # The desktop client also ships for Windows and macOS: the tests of the crates it is made of
+  # run there too (line ends, paths, file locations differ), as in the release workflow.
+  test-os:
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Tests (${{ runner.os }})
+        # --no-fail-fast: one run shows every failing test binary, not only the first.
+        run: cargo test --locked --no-fail-fast -p bastion3270-core -p bastion3270-net -p bastion3270-gui
+
+  # The oldest supported Rust is the `rust-version` of the workspace; read from Cargo.toml so the
+  # check cannot drift from the promise.
+  msrv:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Oldest supported Rust
+        id: msrv
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$version" || { echo "::error::no rust-version in Cargo.toml"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Desktop client build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build with Rust ${{ steps.msrv.outputs.version }}
+        run: cargo check --locked --workspace
+
   advisories:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Security advisories (RustSec)
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
@@ -87,8 +148,11 @@ jobs:
   web-edge:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Desktop client build dependencies
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
       # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; Chrome ships a
@@ -111,14 +175,17 @@ jobs:
         run: cat msedgedriver.log
 
   fuzz-smoke:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         target: [telnet_inbound, datastream, keyboard, client_message, profile_toml]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # libFuzzer's coverage instrumentation needs the nightly-only `-Z sanitizer` flag.
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
@@ -139,10 +206,3 @@ jobs:
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/
-
-  container:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker build -f docker/Dockerfile.server -t bastion3270-server:ci .

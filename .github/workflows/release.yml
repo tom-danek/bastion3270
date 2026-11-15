@@ -15,6 +15,9 @@
 #   per architecture: the static binary of the release archive is the binary of the image. On a
 #   tag the image is pushed to ghcr.io with an SBOM and build provenance, and both
 #   architectures are joined under the version tag and `latest`.
+# * Every release asset and the image get a signed build provenance attestation (GitHub artifact
+#   attestations, Sigstore): `gh attestation verify <file> --repo tom-danek/bastion3270`. The
+#   assets are attested in a dry run too, so that step is tested before a tag relies on it.
 # * The result is a draft release with the archives, the SBOMs and `SHA256SUMS`; it is published
 #   by hand after the notes have been read.
 name: release
@@ -34,8 +37,11 @@ jobs:
   # Licence texts and SBOMs come from Cargo.lock alone (no build): one job for all platforms.
   notices:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
@@ -99,6 +105,8 @@ jobs:
             target: aarch64-apple-darwin
             platform: macos-arm64
     runs-on: ${{ matrix.os }}
+    # A normal build takes 5–15 minutes per platform.
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -107,6 +115,8 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: notices
@@ -198,6 +208,7 @@ jobs:
             arch: arm64
             platform: linux-arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -205,6 +216,8 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository_owner }}/bastion3270-server
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: notices-gateway
@@ -262,14 +275,18 @@ jobs:
           path: digests/*
           if-no-files-found: error
 
-  # One image for both architectures under the version and `latest`.
+  # One image for both architectures under the version and `latest`, with a signed build
+  # provenance attestation (GitHub artifact attestations, Sigstore) pushed next to it.
   image:
     if: startsWith(github.ref, 'refs/tags/')
     needs: gateway
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
+      id-token: write       # the Sigstore signing certificate
+      attestations: write
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/bastion3270-server
     steps:
@@ -279,6 +296,7 @@ jobs:
           path: digests
           merge-multiple: true
       - name: Multi-architecture image
+        id: index
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -292,14 +310,30 @@ jobs:
             -t "$IMAGE:$version" -t "$IMAGE:latest" \
             $(for d in digests/*; do printf '%s@sha256:%s ' "$IMAGE" "$(basename "$d")"; done)
           docker buildx imagetools inspect "$IMAGE:$version"
+          digest=$(docker buildx imagetools inspect "$IMAGE:$version" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Provenance attestation of the image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Verify the attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify "oci://$IMAGE:${GITHUB_REF_NAME#v}" --repo "$GITHUB_REPOSITORY"
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
-    # Not on the image: the archives are released even if the image push failed.
-    needs: [build, gateway]
+  # SHA256SUMS of every release asset and one signed build provenance attestation for all of
+  # them; also in a dry run, so the step is exercised before a tag needs it.
+  attest:
+    needs: [notices, build, gateway]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
+      id-token: write       # the Sigstore signing certificate
+      attestations: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -309,6 +343,39 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Provenance attestation of the assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: Verify the attestation
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in $(cut -d' ' -f3 SHA256SUMS); do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" > /dev/null
+            echo "verified: $f"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-checksums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    # Not on the image: the archives are released even if the image push failed.
+    needs: attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: asset-*
+          path: dist
+          merge-multiple: true
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
