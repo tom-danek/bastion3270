@@ -135,6 +135,65 @@ pub struct CanvasInteraction {
 /// keyboard focus and lock `Tab` / `Shift+Tab` inside the terminal.
 pub const TERMINAL_CANVAS_ID: &str = "bastion3270_terminal_canvas";
 
+/// Measures the `(cell_width, cell_height)` in pixels for the given `font_size_pt`.
+pub fn measure_cell_size(ui: &mut Ui, font_size_pt: f32) -> (f32, f32) {
+    let font_id = FontId::new(font_size_pt, FontFamily::Monospace);
+    let glyph_width = ui
+        .fonts_mut(|f| f.glyph_width(&font_id, 'M'))
+        .max(font_size_pt * DEFAULT_CHAR_ASPECT_RATIO);
+    let cell_width = glyph_width.max(4.0);
+    let cell_height = (font_size_pt * LINE_HEIGHT_MULTIPLIER).max(8.0);
+    (cell_width, cell_height)
+}
+
+/// Computes the exact canvas size in pixels needed to display a `rows × cols` terminal
+/// at `font_size_pt` (including the 8 px bezel padding).
+pub fn desired_canvas_size(ui: &mut Ui, font_size_pt: f32, rows: u16, cols: u16) -> Vec2 {
+    let (cell_width, cell_height) = measure_cell_size(ui, font_size_pt);
+    Vec2::new(
+        (cell_width * f32::from(cols.max(1)) + 8.0).ceil(),
+        (cell_height * f32::from(rows.max(1)) + 8.0).ceil(),
+    )
+}
+
+/// Computes the font size in points (`MIN_FONT_SIZE_PT..=MAX_FONT_SIZE_PT`) for a user
+/// window resize (`dx`, `dy` are absolute width/height deltas).
+pub fn font_size_for_resize(
+    ui: &mut Ui,
+    available: Vec2,
+    rows: u16,
+    cols: u16,
+    dx: f32,
+    dy: f32,
+) -> f32 {
+    let rows_f = f32::from(rows.max(1));
+    let cols_f = f32::from(cols.max(1));
+    let usable_w = (available.x - 8.0).max(cols_f * 4.0);
+    let usable_h = (available.y - 8.0).max(rows_f * 8.0);
+
+    let ref_font = FontId::new(100.0, FontFamily::Monospace);
+    let ref_w = ui.fonts_mut(|f| f.glyph_width(&ref_font, 'M'));
+    let aspect = if ref_w > 0.0 {
+        (ref_w / 100.0).max(DEFAULT_CHAR_ASPECT_RATIO)
+    } else {
+        DEFAULT_CHAR_ASPECT_RATIO
+    };
+
+    let pt_by_w = (usable_w / cols_f) / aspect;
+    let pt_by_h = (usable_h / rows_f) / LINE_HEIGHT_MULTIPLIER;
+    let raw_pt = if dx > 2.0 && dy <= 2.0 {
+        pt_by_w
+    } else if dy > 2.0 && dx <= 2.0 {
+        pt_by_h
+    } else {
+        pt_by_w.min(pt_by_h)
+    };
+    raw_pt.clamp(
+        crate::theme::MIN_FONT_SIZE_PT,
+        crate::theme::MAX_FONT_SIZE_PT,
+    )
+}
+
 /// Renders the Zero-Trust [`SafeScreenView`] onto an `egui::Ui` canvas.
 ///
 /// Supports:
@@ -153,15 +212,7 @@ pub fn render_terminal_canvas(
     selection: Option<Selection>,
 ) -> CanvasInteraction {
     let font_id = FontId::new(theme.font_size_pt, FontFamily::Monospace);
-
-    // Measure actual monospace glyph advance from egui font definitions when available
-    let glyph_width = ui
-        .fonts_mut(|f| f.glyph_width(&font_id, 'M'))
-        .max(theme.font_size_pt * DEFAULT_CHAR_ASPECT_RATIO);
-    let cell_width = glyph_width.ceil().max(6.0);
-    let cell_height = (theme.font_size_pt * LINE_HEIGHT_MULTIPLIER)
-        .ceil()
-        .max(12.0);
+    let (cell_width, cell_height) = measure_cell_size(ui, theme.font_size_pt);
 
     let rows = screen.rows().max(1);
     let cols = screen.cols().max(1);

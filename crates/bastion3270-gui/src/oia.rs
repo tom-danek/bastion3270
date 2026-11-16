@@ -13,6 +13,8 @@ use bastion3270_core::KeyboardState;
 use bastion3270_net::{ProfileTerminalModel, SessionState, SessionStatus};
 use egui::{Color32, RichText, Ui};
 
+use crate::bridge::ConnectionInfo;
+
 /// Pure, deterministically testable snapshot of the Operator Information Area (OIA) line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -45,6 +47,8 @@ pub struct OiaStatusModel {
     pub alarm_active: bool,
     /// Insert mode is on (`INS` indicator, `x3270` OIA insert mode).
     pub insert_mode: bool,
+    /// Transport and TLS details of the active connection, if connected.
+    pub connection_info: Option<ConnectionInfo>,
 }
 
 impl Default for OiaStatusModel {
@@ -64,6 +68,7 @@ impl Default for OiaStatusModel {
             codepage: "cp037".to_string(),
             alarm_active: false,
             insert_mode: false,
+            connection_info: None,
         }
     }
 }
@@ -215,8 +220,55 @@ pub fn format_cursor_rc(row: u16, col: u16) -> String {
     format!("{r1:03}/{c1:03}")
 }
 
+/// Renders the security (`TLS` / `TCP`) badge of the OIA bar with a hover summary of the TLS
+/// session and certificate; returns `true` if the operator clicked it.
+fn security_badge(ui: &mut Ui, oia: &OiaStatusModel) -> bool {
+    let sec_color = if oia.is_tls && matches!(oia.session_state, SessionState::Connected3270) {
+        Color32::from_rgb(0x2E, 0xEB, 0x5A)
+    } else if matches!(oia.session_state, SessionState::Connected3270) {
+        Color32::from_rgb(0xFF, 0xB8, 0x1C)
+    } else {
+        Color32::from_rgb(0x88, 0x92, 0xA0)
+    };
+    let sec_label = match oia
+        .connection_info
+        .as_ref()
+        .and_then(|info| info.tls.as_ref())
+    {
+        Some(tls)
+            if oia.is_tls
+                && matches!(
+                    oia.session_state,
+                    SessionState::Connecting
+                        | SessionState::Negotiating
+                        | SessionState::Connected3270
+                ) =>
+        {
+            format!("{} 🔒", tls.protocol_version)
+        }
+        _ => oia.security_badge().to_owned(),
+    };
+    let sec_response = ui
+        .add(
+            egui::Label::new(
+                RichText::new(sec_label)
+                    .monospace()
+                    .strong()
+                    .color(sec_color),
+            )
+            .sense(egui::Sense::click()),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(security_hover_summary(oia));
+    sec_response.clicked()
+}
+
 /// Renders the Operator Information Area (OIA) bottom status bar inside an `egui::Ui`.
-pub fn render_oia_bar(ui: &mut Ui, oia: &OiaStatusModel) {
+///
+/// Returns `true` if the operator clicked the security (`TLS` / `TCP`) badge to open the
+/// connection and certificate details dialog.
+pub fn render_oia_bar(ui: &mut Ui, oia: &OiaStatusModel) -> bool {
+    let mut open_connection_info = false;
     ui.horizontal(|ui| {
         // 1. 4A / 4B / 4- indicator
         let conn_color = match oia.session_state {
@@ -235,20 +287,10 @@ pub fn render_oia_bar(ui: &mut Ui, oia: &OiaStatusModel) {
         );
         ui.separator();
 
-        // 2. TLS / TCP badge
-        let sec_color = if oia.is_tls && matches!(oia.session_state, SessionState::Connected3270) {
-            Color32::from_rgb(0x2E, 0xEB, 0x5A)
-        } else if matches!(oia.session_state, SessionState::Connected3270) {
-            Color32::from_rgb(0xFF, 0xB8, 0x1C)
-        } else {
-            Color32::from_rgb(0x88, 0x92, 0xA0)
-        };
-        ui.label(
-            RichText::new(oia.security_badge())
-                .monospace()
-                .strong()
-                .color(sec_color),
-        );
+        // 2. TLS / TCP badge (clickable + hover summary of TLS & certificate)
+        if security_badge(ui, oia) {
+            open_connection_info = true;
+        }
         ui.separator();
 
         // 3. Protocol & LU
@@ -303,6 +345,42 @@ pub fn render_oia_bar(ui: &mut Ui, oia: &OiaStatusModel) {
             );
         });
     });
+    open_connection_info
+}
+
+fn security_hover_summary(oia: &OiaStatusModel) -> String {
+    if !matches!(
+        oia.session_state,
+        SessionState::Connecting | SessionState::Negotiating | SessionState::Connected3270
+    ) {
+        return "Not connected (click for connection details)".to_owned();
+    }
+    let Some(info) = &oia.connection_info else {
+        return if oia.is_tls {
+            "TLS encrypted connection (click for details)".to_owned()
+        } else {
+            "Unencrypted TCP connection (click for details)".to_owned()
+        };
+    };
+    let mut lines = Vec::new();
+    if let Some(peer) = info.peer_addr {
+        lines.push(format!("Remote address: {peer}"));
+    }
+    if let Some(tls) = &info.tls {
+        lines.push(format!("Protocol: {}", tls.protocol_version));
+        lines.push(format!("Cipher suite: {}", tls.cipher_suite));
+        if let Some(cert) = &tls.peer_certificate {
+            lines.push(format!("Subject: {}", cert.subject));
+            lines.push(format!("Issuer: {}", cert.issuer));
+            lines.push(format!("Public key: {}", cert.public_key));
+            lines.push(format!("Signature: {}", cert.signature_algorithm));
+            lines.push(format!("Valid until: {}", cert.not_after));
+        }
+    } else {
+        lines.push("Security: Plain TCP (unencrypted)".to_owned());
+    }
+    lines.push("\nClick for full connection & certificate details".to_owned());
+    lines.join("\n")
 }
 
 #[cfg(test)]

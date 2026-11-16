@@ -5,15 +5,15 @@ use std::time::{Duration, Instant};
 
 use bastion3270_core::{ActionKey, AidKey, AttentionKey, KeyboardState, SafeScreenView};
 use bastion3270_net::{ProfileTerminalModel, SessionEvent, SessionState, TlsMode};
-use egui::{
-    Color32, Context, Event, Key, KeyboardShortcut, Modifiers, Panel, RichText, ScrollArea, Ui,
-};
+use egui::{Color32, Context, Event, Key, KeyboardShortcut, Modifiers, Panel, RichText, Ui, Vec2};
 
 use crate::selection::{selection_text, Selection};
-use bastion3270_net::transport::CertificateRejection;
+use bastion3270_net::transport::{CertificateRejection, PeerCertificate};
 
 use crate::bridge::GuiSessionBridge;
-use crate::canvas::{render_terminal_canvas, TERMINAL_CANVAS_ID};
+use crate::canvas::{
+    desired_canvas_size, font_size_for_resize, render_terminal_canvas, TERMINAL_CANVAS_ID,
+};
 use crate::keymap::{translate_key_event, translate_text_input, GuiKeyAction, KeyboardPreset};
 use crate::message::{MessageLevel, StatusMessage};
 use crate::oia::{render_oia_bar, OiaStatusModel};
@@ -56,6 +56,8 @@ pub struct Bastion3270GuiApp {
     pub status_message: Option<StatusMessage>,
     /// Whether the Help → About window is open.
     pub show_about: bool,
+    /// Whether the Connection & Certificate details window is open.
+    pub show_connection_info: bool,
     /// Where the catalog is saved; `None` keeps it in memory only.
     profile_store: Option<ProfileStore>,
     /// The catalog as last written, to notice changes.
@@ -76,6 +78,19 @@ pub struct Bastion3270GuiApp {
     drag_anchor: Option<(u16, u16)>,
     /// A host certificate the last connection refused: the trust dialog is open.
     pub untrusted_certificate: Option<UntrustedCertificate>,
+    /// When `true`, the OS window is resized on the next frame to match the terminal grid at
+    /// `theme.font_size_pt` (on startup, model change, keypad toggle, or explicit zoom).
+    resize_window_to_terminal: bool,
+    /// Last `(rows, cols)` of the terminal screen, used to detect geometry changes.
+    last_grid_dims: (u16, u16),
+    /// Last observed window inner size, used to detect user-initiated window resizing.
+    last_window_size: Option<Vec2>,
+    /// Target window size and remaining frames while waiting for a programmatic `InnerSize`
+    /// command to be applied by the window manager.
+    pending_programmatic_resize: Option<(Vec2, u8)>,
+    /// Timestamp of the last user-initiated window resize, used to snap the window snugly to the
+    /// terminal grid once resizing settles.
+    user_resized_at: Option<Instant>,
 }
 
 /// The trust dialog: which profile's connection refused which certificate.
@@ -109,6 +124,7 @@ impl Bastion3270GuiApp {
             keypad_shift_pf13_24: false,
             status_message: None,
             show_about: false,
+            show_connection_info: false,
             profile_store: None,
             profiles_changed_at: None,
             profile_save_error: None,
@@ -118,6 +134,11 @@ impl Bastion3270GuiApp {
             selection: None,
             drag_anchor: None,
             untrusted_certificate: None,
+            resize_window_to_terminal: true,
+            last_grid_dims: (24, 80),
+            last_window_size: None,
+            pending_programmatic_resize: None,
+            user_resized_at: None,
         };
         app.sync_preferences_from_selected_profile();
         Ok(app)
@@ -309,6 +330,7 @@ impl Bastion3270GuiApp {
                     self.oia.cursor_col = 0;
                     self.oia.session_state = SessionState::Connecting;
                     self.oia.keyboard_state = KeyboardState::Unlocked;
+                    self.oia.connection_info = None;
                     self.status_message = Some(StatusMessage::info(format!(
                         "Connecting to {}:{} ({})...",
                         selected.connection.host, selected.connection.port, selected.name
@@ -343,6 +365,7 @@ impl Bastion3270GuiApp {
         self.bridge.disconnect();
         self.oia.session_state = SessionState::Disconnected;
         self.oia.keyboard_state = KeyboardState::Unlocked;
+        self.oia.connection_info = None;
         self.clear_info_message();
     }
 
@@ -403,13 +426,19 @@ impl Bastion3270GuiApp {
                 // Shown by the OIA bar (`ERR: …`); a "Connecting…" note is out of date.
                 SessionEvent::Error(err) => {
                     self.oia.session_state = SessionState::Error(err);
+                    self.oia.connection_info = None;
                     self.clear_info_message();
                 }
                 SessionEvent::Disconnected => {
                     self.oia.session_state = SessionState::Disconnected;
+                    self.oia.connection_info = None;
                     self.clear_info_message();
                 }
             }
+        }
+
+        if self.oia.session_state.is_active() {
+            self.oia.connection_info = self.bridge.connection_info();
         }
 
         if let Some(rejection) = self.bridge.take_refused_certificate() {
@@ -449,12 +478,15 @@ impl Bastion3270GuiApp {
             }
             GuiKeyAction::ZoomIn => {
                 self.theme.zoom_in();
+                self.resize_window_to_terminal = true;
             }
             GuiKeyAction::ZoomOut => {
                 self.theme.zoom_out();
+                self.resize_window_to_terminal = true;
             }
             GuiKeyAction::ZoomReset => {
                 self.theme.reset_zoom();
+                self.resize_window_to_terminal = true;
             }
         }
     }
@@ -501,7 +533,9 @@ impl Bastion3270GuiApp {
 
         // Bottom Operator Information Area (OIA) status bar
         Panel::bottom("bastion3270_oia_bar").show(ui, |ui| {
-            render_oia_bar(ui, &self.oia);
+            if render_oia_bar(ui, &self.oia) {
+                self.show_connection_info = true;
+            }
         });
 
         // Message line just above the OIA bar (panels added later sit further inside)
@@ -529,39 +563,35 @@ impl Bastion3270GuiApp {
                     .inner_margin(6.0),
             )
             .show(ui, |ui| {
+                self.sync_window_and_font_size(ctx, ui);
+
                 let blink_off =
                     (self.start_instant.elapsed().as_millis() / BLINK_HALF_PERIOD.as_millis()) % 2
                         == 1;
 
-                ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let interaction = render_terminal_canvas(
-                            ui,
-                            &self.screen,
-                            &self.theme,
-                            blink_off,
-                            self.selection,
-                        );
+                let interaction = render_terminal_canvas(
+                    ui,
+                    &self.screen,
+                    &self.theme,
+                    blink_off,
+                    self.selection,
+                );
 
-                        if let Some(move_act) = interaction.clicked_cursor_move {
-                            self.selection = None;
-                            self.drag_anchor = None;
-                            self.apply_key_action(GuiKeyAction::Action(move_act));
-                        }
-                        if let Some(anchor) = interaction.drag_started_at {
-                            self.drag_anchor = Some(anchor);
-                            self.selection = Some(Selection::between(anchor, anchor));
-                        }
-                        if let (Some(anchor), Some(point)) =
-                            (self.drag_anchor, interaction.dragged_to)
-                        {
-                            self.selection = Some(Selection::between(anchor, point));
-                        }
-                        if ui.input(|i| i.pointer.any_released()) {
-                            self.drag_anchor = None;
-                        }
-                    });
+                if let Some(move_act) = interaction.clicked_cursor_move {
+                    self.selection = None;
+                    self.drag_anchor = None;
+                    self.apply_key_action(GuiKeyAction::Action(move_act));
+                }
+                if let Some(anchor) = interaction.drag_started_at {
+                    self.drag_anchor = Some(anchor);
+                    self.selection = Some(Selection::between(anchor, anchor));
+                }
+                if let (Some(anchor), Some(point)) = (self.drag_anchor, interaction.dragged_to) {
+                    self.selection = Some(Selection::between(anchor, point));
+                }
+                if ui.input(|i| i.pointer.any_released()) {
+                    self.drag_anchor = None;
+                }
             });
 
         // Keep keyboard focus locked onto the 3270 terminal canvas (with `lock_focus = true` for
@@ -583,6 +613,76 @@ impl Bastion3270GuiApp {
                 m.request_focus(canvas_id);
                 m.set_focus_lock_filter(canvas_id, tab_filter);
             });
+        }
+    }
+
+    /// Synchronizes the OS window size and `theme.font_size_pt`:
+    /// - When the terminal grid geometry (`rows × cols`) or explicit zoom changes (or on startup),
+    ///   resizes the window to fit the terminal grid snugly.
+    /// - When the user resizes the window, scales `theme.font_size_pt` so the terminal grid fills
+    ///   the available central panel area.
+    fn sync_window_and_font_size(&mut self, ctx: &Context, ui: &mut Ui) {
+        let rows = self.screen.rows().max(1);
+        let cols = self.screen.cols().max(1);
+        if (rows, cols) != self.last_grid_dims {
+            self.last_grid_dims = (rows, cols);
+            self.resize_window_to_terminal = true;
+        }
+
+        let available = ui.available_size();
+        let window_size = ctx.content_rect().size();
+        // Skip headless tests with unbounded/default rects or tiny collapsed windows.
+        if !window_size.x.is_finite()
+            || !window_size.y.is_finite()
+            || window_size.x > 8000.0
+            || window_size.y > 8000.0
+            || available.x < 64.0
+            || available.y < 64.0
+        {
+            return;
+        }
+
+        if self.resize_window_to_terminal {
+            let wanted_canvas = desired_canvas_size(ui, self.theme.font_size_pt, rows, cols);
+            let chrome = (window_size - available).max(Vec2::ZERO);
+            let target_window = (wanted_canvas + chrome).ceil();
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(target_window));
+            self.pending_programmatic_resize = Some((target_window, 8));
+            self.last_window_size = Some(window_size);
+            self.resize_window_to_terminal = false;
+            self.user_resized_at = None;
+            return;
+        }
+
+        if let Some((target, remaining)) = self.pending_programmatic_resize {
+            self.last_window_size = Some(window_size);
+            if (window_size - target).length_sq() <= 9.0 || remaining <= 1 {
+                self.pending_programmatic_resize = None;
+            } else {
+                self.pending_programmatic_resize = Some((target, remaining.saturating_sub(1)));
+            }
+            return;
+        }
+
+        if let Some(last_size) = self.last_window_size {
+            let delta = window_size - last_size;
+            if delta.length_sq() > 4.0 {
+                self.last_window_size = Some(window_size);
+                self.theme.font_size_pt =
+                    font_size_for_resize(ui, available, rows, cols, delta.x.abs(), delta.y.abs());
+                self.user_resized_at = Some(Instant::now());
+                ctx.request_repaint_after(Duration::from_millis(260));
+            } else if let Some(resized_at) = self.user_resized_at {
+                if resized_at.elapsed() >= Duration::from_millis(250)
+                    && !ui.input(|i| i.pointer.any_down())
+                {
+                    self.user_resized_at = None;
+                    self.resize_window_to_terminal = true;
+                    ctx.request_repaint();
+                }
+            }
+        } else {
+            self.last_window_size = Some(window_size);
         }
     }
 
@@ -813,7 +913,9 @@ impl Bastion3270GuiApp {
         {
             self.set_highlight_input_fields(highlight);
         }
-        ui.checkbox(&mut self.show_keypad_bar, "Keypad");
+        if ui.checkbox(&mut self.show_keypad_bar, "Keypad").changed() {
+            self.resize_window_to_terminal = true;
+        }
         ui.separator();
         if ui
             .add(
@@ -823,6 +925,7 @@ impl Bastion3270GuiApp {
             .clicked()
         {
             self.theme.zoom_in();
+            self.resize_window_to_terminal = true;
         }
         if ui
             .add(
@@ -832,6 +935,7 @@ impl Bastion3270GuiApp {
             .clicked()
         {
             self.theme.zoom_out();
+            self.resize_window_to_terminal = true;
         }
         if ui
             .add(
@@ -841,6 +945,11 @@ impl Bastion3270GuiApp {
             .clicked()
         {
             self.theme.reset_zoom();
+            self.resize_window_to_terminal = true;
+        }
+        ui.separator();
+        if ui.button("Connection & Certificate…").clicked() {
+            self.show_connection_info = true;
         }
     }
 
@@ -913,14 +1022,111 @@ impl Bastion3270GuiApp {
         }
     }
 
-    /// The floating windows that are open (About, the certificate trust dialog).
+    /// The floating windows that are open (About, Connection & Certificate, the trust dialog).
     fn render_windows(&mut self, ctx: &Context) {
         if self.show_about {
             self.render_about_window(ctx);
         }
+        if self.show_connection_info {
+            self.render_connection_info_window(ctx);
+        }
         if self.untrusted_certificate.is_some() {
             self.render_untrusted_certificate_window(ctx);
         }
+    }
+
+    /// View → Connection & Certificate (or clicking the TLS/TCP badge in the OIA bar):
+    /// shows the active connection parameters, negotiated TLS version/cipher suite, and
+    /// host certificate details.
+    fn render_connection_info_window(&mut self, ctx: &Context) {
+        let mut open = self.show_connection_info;
+        let profile = self.catalog.selected().cloned();
+        let conn_info = self
+            .oia
+            .connection_info
+            .clone()
+            .or_else(|| self.bridge.connection_info());
+
+        egui::Window::new("Connection & Certificate")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(RichText::new("Connection").strong());
+                egui::Grid::new("connection_details_grid")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        if let Some(p) = &profile {
+                            ui.label("Profile");
+                            ui.label(&p.name);
+                            ui.end_row();
+
+                            ui.label("Target");
+                            ui.label(format!("{}:{}", p.connection.host, p.connection.port));
+                            ui.end_row();
+                        }
+                        if let Some(peer) = conn_info.as_ref().and_then(|c| c.peer_addr) {
+                            ui.label("Remote address");
+                            ui.label(peer.to_string());
+                            ui.end_row();
+                        }
+                        ui.label("Status");
+                        ui.label(self.oia.protocol_badge());
+                        ui.end_row();
+
+                        ui.label("Terminal");
+                        ui.label(self.oia.geometry_badge());
+                        ui.end_row();
+
+                        if let Some(tls) = conn_info.as_ref().and_then(|c| c.tls.as_ref()) {
+                            ui.label("Security");
+                            ui.label(
+                                RichText::new(format!("{} 🔒", tls.protocol_version))
+                                    .color(Color32::from_rgb(0x2E, 0xEB, 0x5A))
+                                    .strong(),
+                            );
+                            ui.end_row();
+
+                            ui.label("Cipher suite");
+                            ui.monospace(&tls.cipher_suite);
+                            ui.end_row();
+
+                            ui.label("Chain length");
+                            ui.label(format!("{} cert(s)", tls.chain_len));
+                            ui.end_row();
+                        } else {
+                            ui.label("Security");
+                            let sec_text = if self.oia.session_state.is_active() {
+                                if self.oia.is_tls {
+                                    "TLS (negotiating)"
+                                } else {
+                                    "Plain TCP (unencrypted)"
+                                }
+                            } else {
+                                "Not connected"
+                            };
+                            ui.label(sec_text);
+                            ui.end_row();
+                        }
+                    });
+
+                if let Some(cert) = conn_info
+                    .as_ref()
+                    .and_then(|c| c.tls.as_ref())
+                    .and_then(|t| t.peer_certificate.as_ref())
+                {
+                    ui.separator();
+                    ui.label(RichText::new("Host Certificate").strong());
+                    render_certificate_grid(ui, "active_certificate_details_grid", cert);
+                    ui.label("SHA-256:");
+                    let hex = cert.sha256_hex();
+                    ui.monospace(fingerprint_groups(&hex));
+                    if ui.button("Copy SHA-256").clicked() {
+                        ui.ctx().copy_text(hex);
+                    }
+                }
+            });
+        self.show_connection_info = open;
     }
 
     /// The host's certificate was refused: what it says, why, and the choice to trust it.
@@ -943,21 +1149,7 @@ impl Bastion3270GuiApp {
                 );
                 ui.label(rejection.problem.hint());
                 ui.separator();
-                egui::Grid::new("untrusted_certificate_details")
-                    .num_columns(2)
-                    .show(ui, |ui| {
-                        for (label, value) in [
-                            ("Subject", cert.subject.clone()),
-                            ("Issuer", cert.issuer.clone()),
-                            ("Valid from", cert.not_before.clone()),
-                            ("Valid until", cert.not_after.clone()),
-                            ("Names", cert.names.join(", ")),
-                        ] {
-                            ui.label(label);
-                            ui.label(value);
-                            ui.end_row();
-                        }
-                    });
+                render_certificate_grid(ui, "untrusted_certificate_details", cert);
                 ui.label("SHA-256:");
                 ui.monospace(fingerprint_groups(&cert.sha256_hex()));
                 ui.separator();
@@ -1131,6 +1323,36 @@ impl eframe::App for Bastion3270GuiApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.autosave_profiles(true);
     }
+}
+
+/// Renders a two-column grid of [`PeerCertificate`] fields.
+fn render_certificate_grid(ui: &mut Ui, id_salt: &str, cert: &PeerCertificate) {
+    let issuer = if cert.issuer == cert.subject {
+        format!("{} (self-signed)", cert.issuer)
+    } else {
+        cert.issuer.clone()
+    };
+    let names = if cert.names.is_empty() {
+        "(none)".to_owned()
+    } else {
+        cert.names.join(", ")
+    };
+    egui::Grid::new(id_salt).num_columns(2).show(ui, |ui| {
+        for (label, value) in [
+            ("Subject", cert.subject.clone()),
+            ("Issuer", issuer),
+            ("Serial number", cert.serial.clone()),
+            ("Public key", cert.public_key.clone()),
+            ("Signature", cert.signature_algorithm.clone()),
+            ("Valid from", cert.not_before.clone()),
+            ("Valid until", cert.not_after.clone()),
+            ("Names", names),
+        ] {
+            ui.label(label);
+            ui.label(value);
+            ui.end_row();
+        }
+    });
 }
 
 /// A fingerprint in groups of four hex digits, so it can be compared by eye.

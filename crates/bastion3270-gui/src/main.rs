@@ -68,7 +68,7 @@ fn main() -> ExitCode {
         .with_title("bastion3270 — TN3270/TN3270E Client")
         .with_app_id(icon::APP_ID)
         .with_inner_size([1024.0, 680.0])
-        .with_min_inner_size([640.0, 420.0]);
+        .with_min_inner_size([400.0, 280.0]);
     if let Some(icon) = icon::app_icon() {
         viewport = viewport.with_icon(icon);
     }

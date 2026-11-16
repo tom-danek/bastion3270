@@ -1,15 +1,25 @@
 //! Non-blocking bridge between the synchronous `egui` render thread and the async `tokio`
 //! [`SessionCoordinator`](bastion3270_net::SessionCoordinator) actor.
 
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use bastion3270_core::{ActionKey, AidKey, AttentionKey};
-use bastion3270_net::transport::CertificateRejection;
+use bastion3270_net::transport::{CertificateRejection, TlsSessionInfo};
 use bastion3270_net::{
     ConnectionProfile, NetError, SessionCoordinator, SessionEvent, SessionHandle, SessionState,
 };
 use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::sync::mpsc;
+
+/// Transport and TLS details of the active connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionInfo {
+    /// Remote socket address (`IP:port`), if available.
+    pub peer_addr: Option<SocketAddr>,
+    /// Negotiated TLS parameters and peer certificate, when TLS is active.
+    pub tls: Option<TlsSessionInfo>,
+}
 
 /// Manages the background Tokio runtime and active [`SessionHandle`] for the GUI.
 #[derive(Debug)]
@@ -24,6 +34,8 @@ pub struct GuiSessionBridge {
     event_rx: Option<mpsc::Receiver<SessionEvent>>,
     /// The host certificate the last connection attempt refused, for the trust dialog.
     refused_certificate: Arc<Mutex<Option<CertificateRejection>>>,
+    /// Transport and TLS details of the current (or most recent) connection.
+    connection_info: Arc<Mutex<Option<ConnectionInfo>>>,
 }
 
 impl GuiSessionBridge {
@@ -40,6 +52,7 @@ impl GuiSessionBridge {
                 active_handle: Arc::new(Mutex::new(None)),
                 event_rx: None,
                 refused_certificate: Arc::default(),
+                connection_info: Arc::default(),
             })
         } else {
             let rt = Builder::new_multi_thread()
@@ -55,6 +68,7 @@ impl GuiSessionBridge {
                 active_handle: Arc::new(Mutex::new(None)),
                 event_rx: None,
                 refused_certificate: Arc::default(),
+                connection_info: Arc::default(),
             })
         }
     }
@@ -85,8 +99,12 @@ impl GuiSessionBridge {
 
         let handle_slot = Arc::clone(&self.active_handle);
         let refused_slot = Arc::clone(&self.refused_certificate);
+        let info_slot = Arc::clone(&self.connection_info);
         if let Ok(mut refused) = refused_slot.lock() {
             *refused = None;
+        }
+        if let Ok(mut info) = info_slot.lock() {
+            *info = None;
         }
 
         self.rt_handle.spawn(async move {
@@ -94,7 +112,21 @@ impl GuiSessionBridge {
                 .send(SessionEvent::StateChanged(SessionState::Connecting))
                 .await;
 
-            match SessionCoordinator::connect(profile).await {
+            let outcome = match bastion3270_net::transport::connect(&profile).await {
+                Ok(stream) => {
+                    let conn_info = ConnectionInfo {
+                        peer_addr: stream.peer_addr().ok(),
+                        tls: stream.tls_session_info(),
+                    };
+                    if let Ok(mut guard) = info_slot.lock() {
+                        *guard = Some(conn_info);
+                    }
+                    SessionCoordinator::spawn(profile, stream)
+                }
+                Err(err) => Err(err),
+            };
+
+            match outcome {
                 Ok((handle, mut net_evt_rx, _join_handle)) => {
                     if let Ok(mut guard) = handle_slot.lock() {
                         *guard = Some(handle);
@@ -123,6 +155,12 @@ impl GuiSessionBridge {
                 }
             }
         });
+    }
+
+    /// Returns the transport and TLS details of the current (or most recent) connection.
+    #[must_use]
+    pub fn connection_info(&self) -> Option<ConnectionInfo> {
+        self.connection_info.lock().ok().and_then(|g| g.clone())
     }
 
     /// The host certificate the last connection attempt refused (once).
@@ -217,6 +255,9 @@ impl GuiSessionBridge {
 
     /// Gracefully disconnects the active session, if any.
     pub fn disconnect(&mut self) {
+        if let Ok(mut info) = self.connection_info.lock() {
+            *info = None;
+        }
         let maybe_handle = self.active_handle.lock().ok().and_then(|mut g| g.take());
         if let Some(handle) = maybe_handle {
             self.rt_handle.spawn(async move {
