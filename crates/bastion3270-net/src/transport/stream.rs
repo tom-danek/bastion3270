@@ -27,6 +27,21 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf, ReadHalf, WriteHa
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
 
+use super::certificate::PeerCertificate;
+
+/// Summary of an active TLS connection and the peer certificate presented by the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TlsSessionInfo {
+    /// Negotiated TLS version (e.g. `"TLS 1.3"` or `"TLS 1.2"`).
+    pub protocol_version: String,
+    /// Negotiated cipher suite name (e.g. `"TLS13_AES_256_GCM_SHA384"`).
+    pub cipher_suite: String,
+    /// Parsed end-entity (host) certificate, if presented.
+    pub peer_certificate: Option<PeerCertificate>,
+    /// Number of certificates in the chain sent by the peer.
+    pub chain_len: usize,
+}
+
 /// Unified asynchronous transport stream for `bastion3270-net`.
 ///
 /// Encapsulates either an unencrypted plain TCP stream ([`TcpStream`]) for local Hercules
@@ -187,6 +202,38 @@ impl TransportStream {
             Self::Plain(_) => None,
             Self::Tls(stream) => stream.get_ref().1.peer_certificates(),
         }
+    }
+
+    /// Returns a summary of the negotiated TLS protocol, cipher suite, and host certificate.
+    ///
+    /// Returns `None` if this stream is unencrypted plain TCP.
+    #[must_use]
+    pub fn tls_session_info(&self) -> Option<TlsSessionInfo> {
+        let Self::Tls(stream) = self else {
+            return None;
+        };
+        let conn = stream.get_ref().1;
+        let protocol_version = match conn.protocol_version() {
+            Some(rustls::ProtocolVersion::TLSv1_3) => "TLS 1.3".to_owned(),
+            Some(rustls::ProtocolVersion::TLSv1_2) => "TLS 1.2".to_owned(),
+            Some(other) => format!("{other:?}"),
+            None => "TLS".to_owned(),
+        };
+        let cipher_suite = match conn.negotiated_cipher_suite() {
+            Some(cs) => format!("{:?}", cs.suite()),
+            None => "(unknown)".to_owned(),
+        };
+        let certs = conn.peer_certificates();
+        let chain_len = certs.map_or(0, <[rustls_pki_types::CertificateDer<'_>]>::len);
+        let peer_certificate = certs
+            .and_then(|c| c.first())
+            .map(|der| PeerCertificate::from_der(der));
+        Some(TlsSessionInfo {
+            protocol_version,
+            cipher_suite,
+            peer_certificate,
+            chain_len,
+        })
     }
 
     /// Returns an immutable reference to the plain TCP stream if this is a [`TransportStream::Plain`].

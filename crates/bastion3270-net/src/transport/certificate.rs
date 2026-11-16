@@ -13,11 +13,12 @@ use core::fmt;
 use std::net::IpAddr;
 
 use rustls::CertificateError;
-use rustls_pki_types::ServerName;
+use rustls_pki_types::{ServerName, UnixTime};
 use sha2::{Digest, Sha256};
 use x509_parser::certificate::X509Certificate;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::FromDer;
+use x509_parser::public_key::PublicKey;
 
 /// What was wrong with the host's certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,8 +52,13 @@ impl CertProblem {
         };
         match cert_error {
             // A bad signature on a chain to a trusted name: a CA of that name signed it, but not
-            // the trusted one (e.g. a CA generated again under the same name).
-            CertificateError::UnknownIssuer | CertificateError::BadSignature => Self::UnknownIssuer,
+            // the trusted one (e.g. a CA generated again under the same name, or switched from
+            // RSA to ECC so its public key type or curve no longer matches the signature).
+            CertificateError::UnknownIssuer
+            | CertificateError::BadSignature
+            | CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext { .. } => {
+                Self::UnknownIssuer
+            }
             CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. } => {
                 Self::NameMismatch {
                     expected: expected.to_str().into_owned(),
@@ -62,9 +68,15 @@ impl CertProblem {
             CertificateError::NotValidYet | CertificateError::NotValidYetContext { .. } => {
                 Self::NotYetValid
             }
-            CertificateError::UnsupportedSignatureAlgorithmContext { .. }
-            | CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext { .. } => {
-                Self::UnsupportedAlgorithm
+            CertificateError::UnsupportedSignatureAlgorithmContext {
+                signature_algorithm_id,
+                ..
+            } => {
+                if is_strong_ecc_signature(signature_algorithm_id) {
+                    Self::UnknownIssuer
+                } else {
+                    Self::UnsupportedAlgorithm
+                }
             }
             other => Self::Other(other.to_string()),
         }
@@ -116,6 +128,12 @@ pub struct PeerCertificate {
     pub subject: String,
     /// Issuer distinguished name.
     pub issuer: String,
+    /// Serial number in colon-separated hex (`01:23:…`).
+    pub serial: String,
+    /// Public key algorithm and size or curve (e.g. `ECC (P-256 / secp256r1, 256 bits)` or `RSA (2048 bits)`).
+    pub public_key: String,
+    /// Signature algorithm used to sign the certificate (e.g. `ECDSA with SHA-384`).
+    pub signature_algorithm: String,
     /// Start of the validity period.
     pub not_before: String,
     /// End of the validity period.
@@ -137,6 +155,9 @@ impl PeerCertificate {
             return Self {
                 subject: unreadable.clone(),
                 issuer: unreadable.clone(),
+                serial: unreadable.clone(),
+                public_key: unreadable.clone(),
+                signature_algorithm: unreadable.clone(),
                 not_before: unreadable.clone(),
                 not_after: unreadable,
                 names: Vec::new(),
@@ -155,6 +176,9 @@ impl PeerCertificate {
         Self {
             subject: cert.subject().to_string(),
             issuer: cert.issuer().to_string(),
+            serial: cert.raw_serial_as_string(),
+            public_key: describe_public_key(&cert),
+            signature_algorithm: describe_signature_algorithm(&cert),
             not_before: cert.validity().not_before.to_string(),
             not_after: cert.validity().not_after.to_string(),
             names,
@@ -248,6 +272,32 @@ fn ip_from_bytes(raw: &[u8]) -> Option<IpAddr> {
     <[u8; 16]>::try_from(raw).ok().map(IpAddr::from)
 }
 
+/// Checks that `der` is valid at `now` (`not_before <= now <= not_after`).
+///
+/// Used when a certificate is trusted directly from the system store or `ca_cert` (where
+/// `webpki` would otherwise treat it only as an issuing CA).
+///
+/// # Errors
+/// Returns [`CertificateError::BadEncoding`], [`CertificateError::NotValidYet`], or
+/// [`CertificateError::Expired`] wrapped in [`rustls::Error::InvalidCertificate`].
+pub fn check_cert_validity(der: &[u8], now: UnixTime) -> core::result::Result<(), rustls::Error> {
+    let (_, cert) = X509Certificate::from_der(der)
+        .map_err(|_| rustls::Error::InvalidCertificate(CertificateError::BadEncoding))?;
+    let validity = cert.validity();
+    let Ok(now_secs) = i64::try_from(now.as_secs()) else {
+        return Err(rustls::Error::InvalidCertificate(CertificateError::Expired));
+    };
+    if now_secs < validity.not_before.timestamp() {
+        return Err(rustls::Error::InvalidCertificate(
+            CertificateError::NotValidYet,
+        ));
+    }
+    if now_secs > validity.not_after.timestamp() {
+        return Err(rustls::Error::InvalidCertificate(CertificateError::Expired));
+    }
+    Ok(())
+}
+
 /// Does the certificate's common name match `name`, for a certificate **without** DNS or IP
 /// subject alternative names?
 ///
@@ -309,6 +359,88 @@ fn dns_matches(pattern: &str, host: &str) -> bool {
         };
     }
     !pattern.is_empty() && pattern.eq_ignore_ascii_case(host)
+}
+
+/// Does `alg_id` (DER `AlgorithmIdentifier` content) name an ECC signature with SHA-256 or
+/// stronger (e.g. `ecdsa-with-SHA512`, `ecdsa-with-SHA256`/`384` with explicit parameters,
+/// `ecdsa-with-sha3-*`, or `Ed448`) that `ring` does not verify in chains, rather than an
+/// obsolete digest like SHA-1 or MD5?
+fn is_strong_ecc_signature(alg_id: &[u8]) -> bool {
+    // 1.2.840.10045.4.3.{2,3,4}: ecdsa-with-SHA256 / SHA384 / SHA512 (RFC 5758).
+    const ECDSA_SHA2_PREFIX: &[u8] = &[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03];
+    // 2.16.840.1.101.3.4.3.{10,11,12}: id-ecdsa-with-sha3-256 / 384 / 512.
+    const ECDSA_SHA3_PREFIX: &[u8] = &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03];
+    // 1.3.101.113: id-Ed448 (RFC 8410).
+    const ED448_OID: &[u8] = &[0x06, 0x03, 0x2b, 0x65, 0x71];
+
+    if let Some(&digest) = alg_id
+        .strip_prefix(ECDSA_SHA2_PREFIX)
+        .and_then(|rest| rest.first())
+    {
+        return matches!(digest, 0x02..=0x04);
+    }
+    if let Some(&digest) = alg_id
+        .strip_prefix(ECDSA_SHA3_PREFIX)
+        .and_then(|rest| rest.first())
+    {
+        return matches!(digest, 0x0a..=0x0c);
+    }
+    alg_id.starts_with(ED448_OID)
+}
+
+/// Human-readable public key type and size or curve (e.g. `ECC (P-256 / secp256r1, 256 bits)`
+/// or `RSA (2048 bits)`).
+fn describe_public_key(cert: &X509Certificate<'_>) -> String {
+    let spki = cert.public_key();
+    let alg_oid = spki.algorithm.algorithm.to_id_string();
+    match spki.parsed() {
+        Ok(PublicKey::RSA(rsa)) => format!("RSA ({} bits)", rsa.key_size()),
+        Ok(PublicKey::EC(_)) => {
+            let curve_oid = spki
+                .algorithm
+                .parameters
+                .as_ref()
+                .and_then(|any| any.as_oid().ok())
+                .map(|oid| oid.to_id_string());
+            match curve_oid.as_deref() {
+                Some("1.2.840.10045.3.1.7") => "ECC (P-256 / secp256r1, 256 bits)".to_owned(),
+                Some("1.3.132.0.34") => "ECC (P-384 / secp384r1, 384 bits)".to_owned(),
+                Some("1.3.132.0.35") => "ECC (P-521 / secp521r1, 521 bits)".to_owned(),
+                Some("1.3.36.3.3.2.8.1.1.7") => "ECC (brainpoolP256r1, 256 bits)".to_owned(),
+                Some("1.3.36.3.3.2.8.1.1.11") => "ECC (brainpoolP384r1, 384 bits)".to_owned(),
+                Some("1.3.36.3.3.2.8.1.1.13") => "ECC (brainpoolP512r1, 512 bits)".to_owned(),
+                Some(other) => format!("ECC ({other})"),
+                None => "ECC".to_owned(),
+            }
+        }
+        Ok(PublicKey::DSA(_)) => "DSA".to_owned(),
+        _ => match alg_oid.as_str() {
+            "1.3.101.112" => "Ed25519 (256 bits)".to_owned(),
+            "1.3.101.113" => "Ed448 (448 bits)".to_owned(),
+            _ => alg_oid,
+        },
+    }
+}
+
+/// Human-readable signature algorithm of the certificate.
+fn describe_signature_algorithm(cert: &X509Certificate<'_>) -> String {
+    let oid = cert.signature_algorithm.algorithm.to_id_string();
+    match oid.as_str() {
+        "1.2.840.10045.4.3.2" => "ECDSA with SHA-256".to_owned(),
+        "1.2.840.10045.4.3.3" => "ECDSA with SHA-384".to_owned(),
+        "1.2.840.10045.4.3.4" => "ECDSA with SHA-512".to_owned(),
+        "1.2.840.10045.4.3.1" => "ECDSA with SHA-224".to_owned(),
+        "1.2.840.10045.4.1" => "ECDSA with SHA-1".to_owned(),
+        "1.2.840.113549.1.1.11" => "RSA PKCS#1 v1.5 with SHA-256".to_owned(),
+        "1.2.840.113549.1.1.12" => "RSA PKCS#1 v1.5 with SHA-384".to_owned(),
+        "1.2.840.113549.1.1.13" => "RSA PKCS#1 v1.5 with SHA-512".to_owned(),
+        "1.2.840.113549.1.1.10" => "RSA-PSS".to_owned(),
+        "1.2.840.113549.1.1.5" | "1.3.14.3.2.29" => "RSA PKCS#1 v1.5 with SHA-1".to_owned(),
+        "1.2.840.113549.1.1.4" | "1.3.14.3.2.3" => "RSA PKCS#1 v1.5 with MD5".to_owned(),
+        "1.3.101.112" => "Ed25519".to_owned(),
+        "1.3.101.113" => "Ed448".to_owned(),
+        _ => oid,
+    }
 }
 
 #[cfg(test)]
@@ -374,12 +506,17 @@ mod tests {
         let peer = PeerCertificate::from_der(&der);
         assert_eq!(peer.subject, "CN=zos1.bank.example");
         assert_eq!(peer.issuer, "CN=zos1.bank.example");
+        assert_ne!(peer.serial, "");
+        assert_eq!(peer.public_key, "ECC (P-256 / secp256r1, 256 bits)");
+        assert_eq!(peer.signature_algorithm, "ECDSA with SHA-256");
         assert_eq!(peer.names, ["DNS:zos1.bank.example", "IP:10.1.2.3"]);
         assert_eq!(peer.sha256, sha256(&der));
         assert_eq!(parse_sha256_hex(&peer.sha256_hex()), Some(peer.sha256));
 
         let garbage = PeerCertificate::from_der(b"not a certificate");
         assert_eq!(garbage.subject, "(unreadable)");
+        assert_eq!(garbage.public_key, "(unreadable)");
+        assert_eq!(garbage.signature_algorithm, "(unreadable)");
     }
 
     #[test]
@@ -413,6 +550,26 @@ mod tests {
                 supported_algorithms: vec![],
             }),
             CertProblem::UnsupportedAlgorithm
+        );
+        // An ECC certificate whose issuer name matches an older RSA CA in the trust store, or
+        // signed with ECDSA-SHA512 (1.2.840.10045.4.3.4), is untrusted rather than weak.
+        assert_eq!(
+            classify(
+                CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext {
+                    signature_algorithm_id: vec![],
+                    public_key_algorithm_id: vec![],
+                }
+            ),
+            CertProblem::UnknownIssuer
+        );
+        assert_eq!(
+            classify(CertificateError::UnsupportedSignatureAlgorithmContext {
+                signature_algorithm_id: vec![
+                    0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04
+                ],
+                supported_algorithms: vec![],
+            }),
+            CertProblem::UnknownIssuer
         );
     }
 }

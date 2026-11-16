@@ -2,6 +2,7 @@
 
 pub mod certificate;
 pub mod connector;
+pub mod ecdsa;
 pub mod stream;
 pub mod tcp;
 pub mod tls;
@@ -9,7 +10,7 @@ pub mod trust;
 
 pub use certificate::{CertProblem, CertificateRejection, PeerCertificate};
 pub use connector::{connect, connect_with_idle_timeout, connect_with_trust};
-pub use stream::TransportStream;
+pub use stream::{TlsSessionInfo, TransportStream};
 pub use tcp::{
     connect_tcp, connect_tcp_stream, read_with_idle_timeout, IdleTimeoutDetector, IdleTimeoutStream,
 };

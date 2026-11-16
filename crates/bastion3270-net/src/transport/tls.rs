@@ -121,7 +121,7 @@ fn tls_client_config(
     profile: &ConnectionProfile,
     trust: &HostTrust,
 ) -> Result<(Arc<ClientConfig>, RejectionSlot)> {
-    let roots = trust.roots_with(profile.ca_cert.as_deref())?;
+    let (roots, trusted_certs) = trust.roots_with(profile.ca_cert.as_deref())?;
     let accept_name = profile
         .accept_hostname
         .as_deref()
@@ -135,7 +135,13 @@ fn tls_client_config(
     };
 
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let verifier = HostCertVerifier::new(roots, Arc::clone(&provider), accept_name, pin);
+    let verifier = HostCertVerifier::with_trusted_certs(
+        roots,
+        trusted_certs,
+        Arc::clone(&provider),
+        accept_name,
+        pin,
+    );
     let rejection = verifier.rejection();
 
     let builder = ClientConfig::builder_with_provider(provider)
