@@ -40,9 +40,12 @@ fuzz_target!(|data: &[u8]| {
         ClientMessage::Attention { key } => parse_names(&key),
         ClientMessage::Key { ch } => assert_eq!(ch.to_string().chars().count(), 1),
         ClientMessage::Open { .. }
+        | ClientMessage::OpenCustom { .. }
         | ClientMessage::Resume { .. }
         | ClientMessage::Text { .. }
         | ClientMessage::MoveCursor { .. }
+        | ClientMessage::Print
+        | ClientMessage::BlankFill { .. }
         | ClientMessage::Disconnect => {}
     }
 });

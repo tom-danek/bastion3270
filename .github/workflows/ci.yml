@@ -60,6 +60,10 @@ jobs:
           cargo fmt --all --check --manifest-path fuzz/Cargo.toml
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
+      # The fuzz targets are their own workspace and are fuzzed only weekly; build them on every
+      # change, so a change to a type they match on cannot break them unnoticed.
+      - name: Fuzz targets build
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
       - name: Tests
         run: cargo test --locked --workspace
       # The shipped example configurations must stay valid (also the one inside the ConfigMap).
