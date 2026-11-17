@@ -27,7 +27,8 @@ use std::sync::LazyLock;
 use bastion3270_core::address::BufferAddress;
 use bastion3270_server::ServerConfig;
 use common::browser::{
-    cell_offset, copy_text, focus_terminal, js, wait_until, with_browser, with_module, Browser,
+    cell_offset, copy_text, devtools, focus_terminal, js, wait_until, with_browser, with_module,
+    Browser,
 };
 use common::gateway::{start, Running};
 use common::mock_host::{self, aid_of, host_receives_aid, MockHost};
@@ -2199,11 +2200,7 @@ async fn the_browser_finds_the_client_installable() {
     let fx = Fixture::start().await;
     with_browser(|driver| async move {
         driver.goto(fx.url()).await.unwrap();
-        let tools = driver.cdp();
-        let manifest = tools
-            .send_raw("Page.getAppManifest", json!({}))
-            .await
-            .unwrap();
+        let manifest = devtools(&driver, "Page.getAppManifest", json!({})).await;
         assert!(
             manifest["url"]
                 .as_str()
@@ -2211,10 +2208,7 @@ async fn the_browser_finds_the_client_installable() {
             "the page's manifest was loaded: {manifest}"
         );
         assert_eq!(manifest["errors"], json!([]), "manifest errors");
-        let answer = tools
-            .send_raw("Page.getInstallabilityErrors", json!({}))
-            .await
-            .unwrap();
+        let answer = devtools(&driver, "Page.getInstallabilityErrors", json!({})).await;
         assert_eq!(
             answer["installabilityErrors"],
             json!([]),

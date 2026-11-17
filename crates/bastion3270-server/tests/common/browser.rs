@@ -111,6 +111,47 @@ pub async fn js<T: DeserializeOwned>(driver: &WebDriver, script: &str, args: Vec
         .unwrap()
 }
 
+/// A Chrome DevTools Protocol command sent through the driver's vendor endpoint
+/// `/session/{id}/{vendor}/cdp/execute`. chromedriver serves it under `goog`, msedgedriver
+/// under `ms`; `WebDriver::cdp` of thirtyfour knows only `goog`, so Edge answers it with
+/// "unknown command".
+#[derive(Debug)]
+struct DevToolsCommand {
+    vendor: &'static str,
+    method: String,
+    params: Value,
+}
+
+impl thirtyfour::common::command::FormatRequestData for DevToolsCommand {
+    fn format_request(&self, session_id: &thirtyfour::SessionId) -> thirtyfour::RequestData {
+        thirtyfour::RequestData::new(
+            axum::http::Method::POST,
+            format!("/session/{session_id}/{}/cdp/execute", self.vendor),
+        )
+        .add_body(serde_json::json!({ "cmd": self.method, "params": self.params }))
+    }
+}
+
+/// Runs the DevTools command `method` with `params` in Chrome or Edge and returns its result.
+/// Firefox has no DevTools endpoint; callers skip it.
+pub async fn devtools(driver: &WebDriver, method: &str, params: Value) -> Value {
+    let vendor = match Browser::selected() {
+        Browser::Chrome => "goog",
+        Browser::Edge => "ms",
+        Browser::Firefox => panic!("Firefox has no DevTools endpoint"),
+    };
+    let command = DevToolsCommand {
+        vendor,
+        method: method.to_owned(),
+        params,
+    };
+    driver
+        .cmd(command)
+        .await
+        .and_then(thirtyfour::session::http::CmdResponse::value_json)
+        .unwrap_or_else(|e| panic!("DevTools {method} failed: {e}"))
+}
+
 /// Imports the page module `module` (e.g. `/keymap.js`) in the browser and returns
 /// `body(m)`, where `body` is the source of a JavaScript function taking the module object.
 /// The module therefore runs in the real browser, exactly as the client loads it.
