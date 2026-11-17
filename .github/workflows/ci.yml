@@ -168,6 +168,13 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The first start of Edge on a fresh runner does one-time work that made the first
+      # sessions of the parallel tests miss msedgedriver's 60 s renderer timeout; later sessions
+      # start in about a second. Start it once before the tests.
+      - name: Start Edge once
+        run: |
+          edge=$(command -v microsoft-edge || command -v microsoft-edge-stable)
+          time timeout 180 "$edge" --headless=new --disable-gpu --no-first-run --dump-dom about:blank > /dev/null
       - name: Web client tests (Edge)
         env:
           BASTION3270_WEBDRIVER: edge
